@@ -1,0 +1,69 @@
+﻿# ==============================================================
+#  FinAgent â€“ .gitignore
+# ==============================================================
+
+# --- Secrets & Environment ---
+.env
+*.pem
+*.key
+
+# --- Python ---
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+*.egg
+*.egg-info/
+dist/
+build/
+eggs/
+parts/
+var/
+sdist/
+wheels/
+pip-wheel-metadata/
+.installed.cfg
+MANIFEST
+
+# --- Virtual Environments ---
+.venv/
+venv/
+env/
+ENV/
+.conda/
+
+# --- Data Files (raw & processed â€“ can be large) ---
+data/raw/*
+data/processed/*
+!data/raw/.gitkeep
+!data/processed/.gitkeep
+
+# --- Logs ---
+*.log
+finagent.log
+
+# --- Jupyter Notebook checkpoints ---
+.ipynb_checkpoints/
+*.ipynb_checkpoints
+
+# --- IDE / Editor ---
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# --- Testing & Coverage ---
+.pytest_cache/
+.coverage
+htmlcov/
+coverage.xml
+
+# --- Type checking ---
+.mypy_cache/
+.dmypy.json
+dmypy.json
+
