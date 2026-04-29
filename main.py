@@ -1,26 +1,26 @@
 ﻿"""
 main.py
 -------
-FinAgent ??" AI-Powered Financial Data Agent
+FinAgent - AI-Powered Financial Data Agent
 Entry point and workflow orchestrator.
 
 Pipeline stages
 ---------------
-  1. Data Collection   : fetch stock prices, financials, news, macro indicators
-  2. Data Processing   : clean, normalise, and engineer features
-  3. Visualisation     : generate all four required chart types
-  4. AI Analysis       : produce LLM-powered narrative reports
+  1. Data Collection  : fetch stock prices, financials, news, macro indicators
+  2. Data Processing  : clean, normalise, and engineer features
+  3. Visualisation    : generate all four required chart types
+  4. AI Analysis      : produce LLM-powered narrative reports
 
 Usage
 -----
-  python main.py                         # run full pipeline with defaults
-  python main.py --tickers AAPL MSFT     # specify tickers
-  python main.py --start 2023-01-01      # override start date
-  python main.py --provider openai       # select LLM provider
+  python main.py                          run full pipeline with defaults
+  python main.py --tickers AAPL MSFT      specify tickers
+  python main.py --start 2023-01-01       override start date
+  python main.py --provider gemini        select LLM provider (default)
 
 Environment
 -----------
-  Copy .env.example ??' .env and fill in your API keys before running.
+  Copy .env.example to .env and fill in your API keys before running.
 """
 
 import argparse
@@ -49,10 +49,10 @@ logger = logging.getLogger(__name__)
 # Defaults
 # ---------------------------------------------------------------------------
 
-DEFAULT_TICKERS = ["AAPL", "MSFT", "GOOGL", "NVDA"]
-DEFAULT_START = (datetime.today() - timedelta(days=365)).strftime("%Y-%m-%d")
-DEFAULT_END = datetime.today().strftime("%Y-%m-%d")
-DEFAULT_PROVIDER = "anthropic"
+DEFAULT_TICKERS  = ["AAPL", "MSFT", "GOOGL", "NVDA"]
+DEFAULT_START    = (datetime.today() - timedelta(days=365)).strftime("%Y-%m-%d")
+DEFAULT_END      = datetime.today().strftime("%Y-%m-%d")
+DEFAULT_PROVIDER = "gemini"
 
 
 # ---------------------------------------------------------------------------
@@ -62,7 +62,7 @@ DEFAULT_PROVIDER = "anthropic"
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="FinAgent",
-        description="AI-Powered Financial Data Agent ??" end-to-end pipeline runner.",
+        description="AI-Powered Financial Data Agent - end-to-end pipeline runner.",
     )
     parser.add_argument(
         "--tickers",
@@ -86,7 +86,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--provider",
         default=DEFAULT_PROVIDER,
-        choices=["anthropic", "openai"],
+        choices=["gemini", "anthropic", "openai"],
         help="LLM provider for AI analysis (default: %(default)s).",
     )
     parser.add_argument(
@@ -102,8 +102,8 @@ def build_parser() -> argparse.ArgumentParser:
 # ---------------------------------------------------------------------------
 
 def run_collection(tickers: list[str], start: str, end: str) -> dict:
-    """Stage 1 ??" collect raw data from all configured sources."""
-    logger.info("=== Stage 1: Data Collection ===")
+    """Stage 1 - collect raw data from all configured sources."""
+    logger.info("Stage 1: Data Collection")
     collector = DataCollector(tickers=tickers, start_date=start, end_date=end)
 
     # TODO: call collector methods and store results
@@ -112,13 +112,13 @@ def run_collection(tickers: list[str], start: str, end: str) -> dict:
     # raw_macro  = collector.fetch_macro_indicators(["FX_DAILY"])
 
     raw_data = {}  # placeholder
-    logger.info("Data collection complete ??" %d ticker(s) collected.", len(tickers))
+    logger.info("Data collection complete - %d ticker(s) collected.", len(tickers))
     return raw_data
 
 
 def run_processing(raw_data: dict) -> dict[str, any]:
-    """Stage 2 ??" clean, normalise, and engineer features."""
-    logger.info("=== Stage 2: Data Processing ===")
+    """Stage 2 - clean, normalise, and engineer features."""
+    logger.info("Stage 2: Data Processing")
     processed_data = {}
 
     for ticker, df in raw_data.items():
@@ -126,21 +126,21 @@ def run_processing(raw_data: dict) -> dict[str, any]:
         processor = DataProcessor(df=df, ticker=ticker)
         # TODO: processed_data[ticker] = processor.run_pipeline()
 
-    logger.info("Processing complete ??" %d ticker(s) processed.", len(processed_data))
+    logger.info("Processing complete - %d ticker(s) processed.", len(processed_data))
     return processed_data
 
 
 def run_visualisation(processed_data: dict) -> None:
-    """Stage 3 ??" generate all four chart types."""
-    logger.info("=== Stage 3: Visualisation ===")
+    """Stage 3 - generate all four chart types."""
+    logger.info("Stage 3: Visualisation")
     visualizer = DataVisualizer(data=processed_data)
     # TODO: visualizer.render_all()
     logger.info("Visualisation complete.")
 
 
 def run_ai_analysis(processed_data: dict, provider: str) -> dict[str, str]:
-    """Stage 4 ??" LLM-powered narrative analysis."""
-    logger.info("=== Stage 4: AI Analysis (provider=%s) ===", provider)
+    """Stage 4 - LLM-powered narrative analysis."""
+    logger.info("Stage 4: AI Analysis (provider=%s)", provider)
     agent = AIAgent(provider=provider)
     # TODO: reports = agent.run_full_analysis(processed_data)
     reports = {}  # placeholder
@@ -158,11 +158,11 @@ def main() -> None:
 
     logger.info("FinAgent pipeline starting.")
     logger.info("Tickers : %s", args.tickers)
-    logger.info("Period  : %s ??' %s", args.start, args.end)
+    logger.info("Period  : %s to %s", args.start, args.end)
     logger.info("Provider: %s", args.provider)
 
     try:
-        raw_data = run_collection(args.tickers, args.start, args.end)
+        raw_data       = run_collection(args.tickers, args.start, args.end)
         processed_data = run_processing(raw_data)
         run_visualisation(processed_data)
 
@@ -183,4 +183,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

@@ -1,12 +1,12 @@
 ﻿# FinAgent
 
 **AI-Powered Financial Data Agent**
-IT Application in Banking and Finance -- 2026
+IT Application in Banking and Finance - 2026
 
 FinAgent is an end-to-end pipeline that autonomously collects live financial
 data, cleans and engineers features, generates four categories of financial
-charts, and delivers LLM-powered natural language analysis via Anthropic
-Claude or OpenAI GPT.
+charts, and delivers LLM-powered natural language analysis via Google Gemini,
+Anthropic Claude, or OpenAI GPT.
 
 ---
 
@@ -30,22 +30,22 @@ Claude or OpenAI GPT.
 
 ```
 FinAgent/
-??? data/
-?   ??? raw/               # Raw data fetched from APIs (git-ignored)
-?   ??? processed/         # Cleaned data and chart exports (git-ignored)
-??? modules/
-?   ??? __init__.py        # Package exports
-?   ??? collector.py       # Stage 1 - Data acquisition
-?   ??? processor.py       # Stage 2 - Cleaning and feature engineering
-?   ??? visualizer.py      # Stage 3 - Chart generation
-?   ??? ai_agent.py        # Stage 4 - LLM analysis
-??? notebooks/             # Jupyter notebooks for experimentation
-??? .env                   # Local secrets -- never commit (git-ignored)
-??? .env.example           # API key configuration template
-??? .gitignore
-??? requirements.txt
-??? main.py                # Pipeline entry point
-??? README.md
+├── data/
+│   ├── raw/               # Raw data fetched from APIs (git-ignored)
+│   └── processed/         # Cleaned data and chart exports (git-ignored)
+├── modules/
+│   ├── __init__.py        # Package exports
+│   ├── collector.py       # Stage 1 - Data acquisition
+│   ├── processor.py       # Stage 2 - Cleaning and feature engineering
+│   ├── visualizer.py      # Stage 3 - Chart generation
+│   └── ai_agent.py        # Stage 4 - LLM analysis
+├── notebooks/             # Jupyter notebooks for experimentation
+├── .env                   # Local secrets - never commit (git-ignored)
+├── .env.example           # API key configuration template
+├── .gitignore
+├── requirements.txt
+├── main.py                # Pipeline entry point
+└── README.md
 ```
 
 ---
@@ -57,7 +57,7 @@ FinAgent/
 | **Collector**  | Stock prices (yfinance), financial statements, news (NewsAPI), macro indicators (Alpha Vantage)       |
 | **Processor**  | Missing value handling, duplicate removal, type normalisation, outlier detection, feature engineering |
 | **Visualizer** | Price trend + volume, correlation heatmap, returns distribution, rolling stats / Bollinger Bands      |
-| **AI Agent**   | Trend summary, anomaly report, risk commentary, multi-asset comparison (Claude / GPT)                 |
+| **AI Agent**   | Trend summary, anomaly report, risk commentary, multi-asset comparison via Gemini / Claude / GPT      |
 
 ---
 
@@ -66,7 +66,7 @@ FinAgent/
 ### 1. Clone the repository
 
 ```bash
-git clone https://github.com/<your-org>/FinAgent.git
+git clone https://github.com/Thanhizme/FinAgent.git
 cd FinAgent
 ```
 
@@ -113,28 +113,32 @@ python main.py
 All secrets and runtime settings are managed via the `.env` file.
 See [`.env.example`](.env.example) for the complete list of supported variables.
 
-| Variable                | Required            | Description               |
-|-------------------------|---------------------|---------------------------|
-| `ANTHROPIC_API_KEY`     | Yes (or OpenAI)     | Anthropic Claude API key  |
-| `OPENAI_API_KEY`        | Yes (or Anthropic)  | OpenAI GPT API key        |
-| `NEWS_API_KEY`          | Yes                 | NewsAPI.org developer key |
-| `ALPHA_VANTAGE_API_KEY` | Yes                 | Alpha Vantage API key     |
+| Variable                | Required             | Description                         |
+|-------------------------|----------------------|-------------------------------------|
+| `GEMINI_API_KEY`        | Yes (default)        | Google Gemini API key [DEFAULT]     |
+| `ANTHROPIC_API_KEY`     | Optional             | Anthropic Claude API key            |
+| `OPENAI_API_KEY`        | Optional             | OpenAI GPT API key                  |
+| `NEWS_API_KEY`          | Yes                  | NewsAPI.org developer key           |
+| `ALPHA_VANTAGE_API_KEY` | Yes                  | Alpha Vantage API key               |
+
+Get your free Gemini API key at: https://aistudio.google.com/app/apikey
 
 **Important:** Never commit your `.env` file. It is listed in `.gitignore`
-and must remain local to each developer's machine.
+and must remain local to each developer machine.
 
 ---
 
 ## Usage
 
 ```bash
-# Run with default tickers (AAPL, MSFT, GOOGL, NVDA) over the last 365 days
+# Run with default tickers (AAPL, MSFT, GOOGL, NVDA) using Gemini
 python main.py
 
 # Custom tickers and date range
 python main.py --tickers TSLA AMZN META --start 2024-01-01 --end 2024-12-31
 
-# Use OpenAI instead of Anthropic
+# Use a different LLM provider
+python main.py --provider anthropic
 python main.py --provider openai
 
 # Skip AI analysis (offline / cost-saving mode)
@@ -143,13 +147,13 @@ python main.py --skip-ai
 
 ### CLI Reference
 
-| Argument     | Default                | Description                               |
-|--------------|------------------------|-------------------------------------------|
-| `--tickers`  | `AAPL MSFT GOOGL NVDA` | One or more stock ticker symbols          |
-| `--start`    | 1 year ago             | Historical data start date (YYYY-MM-DD)   |
-| `--end`      | Today                  | Historical data end date (YYYY-MM-DD)     |
-| `--provider` | `anthropic`            | LLM provider: `anthropic` or `openai`     |
-| `--skip-ai`  | `False`                | Skip the AI analysis stage                |
+| Argument     | Default                | Description                                    |
+|--------------|------------------------|------------------------------------------------|
+| `--tickers`  | `AAPL MSFT GOOGL NVDA` | One or more stock ticker symbols               |
+| `--start`    | 1 year ago             | Historical data start date (YYYY-MM-DD)        |
+| `--end`      | Today                  | Historical data end date (YYYY-MM-DD)          |
+| `--provider` | `gemini`               | LLM provider: `gemini`, `anthropic`, `openai`  |
+| `--skip-ai`  | `False`                | Skip the AI analysis stage                     |
 
 ---
 
@@ -168,46 +172,46 @@ are caught, logged, and propagated cleanly to avoid silent data corruption.
 
 ## Modules
 
-### collector.py -- Data Collection
+### collector.py - Data Collection
 
 Fetches raw financial data from multiple sources and persists it to
 `data/raw/` as CSV or JSON files.
 
-- `fetch_stock_prices()` -- OHLCV history via yfinance
-- `fetch_financial_statements()` -- Quarterly income statement, balance sheet, cash flow
-- `fetch_news(query)` -- Latest articles via NewsAPI
-- `fetch_macro_indicators(symbols)` -- Exchange rates and commodities via Alpha Vantage
+- `fetch_stock_prices()` - OHLCV history via yfinance
+- `fetch_financial_statements()` - Quarterly income statement, balance sheet, cash flow
+- `fetch_news(query)` - Latest articles via NewsAPI
+- `fetch_macro_indicators(symbols)` - Exchange rates and commodities via Alpha Vantage
 
-### processor.py -- Data Processing
+### processor.py - Data Processing
 
 Cleans and enriches raw DataFrames, saving output to `data/processed/`.
 
-- `handle_missing_values(strategy)` -- `ffill`, `interpolate`, or `drop`
-- `remove_duplicates()` -- Detection and removal with audit logging
-- `normalise_types()` -- DatetimeIndex, float64 casting, currency string stripping
-- `detect_outliers(method, threshold)` -- IQR or Z-score; flags an `is_outlier` column
-- `engineer_features()` -- `daily_return`, `rolling_avg_7`, `rolling_avg_30`, `volatility_30`, `cum_return`
-- `run_pipeline()` -- Executes all steps in sequence
+- `handle_missing_values(strategy)` - `ffill`, `interpolate`, or `drop`
+- `remove_duplicates()` - Detection and removal with audit logging
+- `normalise_types()` - DatetimeIndex, float64 casting, currency string stripping
+- `detect_outliers(method, threshold)` - IQR or Z-score; flags an `is_outlier` column
+- `engineer_features()` - `daily_return`, `rolling_avg_7`, `rolling_avg_30`, `volatility_30`, `cum_return`
+- `run_pipeline()` - Executes all steps in sequence
 
-### visualizer.py -- Visualisation
+### visualizer.py - Visualisation
 
 Generates the four required chart types and saves them to `data/processed/`.
 
-- `price_trend_chart(ticker)` -- Price line or candlestick with volume overlay
-- `correlation_heatmap()` -- Pairwise asset return correlation matrix
-- `returns_distribution(tickers)` -- Histogram and KDE of daily returns
-- `rolling_stats_chart(ticker)` -- Moving averages with Bollinger Bands shading
+- `price_trend_chart(ticker)` - Price line or candlestick with volume overlay
+- `correlation_heatmap()` - Pairwise asset return correlation matrix
+- `returns_distribution(tickers)` - Histogram and KDE of daily returns
+- `rolling_stats_chart(ticker)` - Moving averages with Bollinger Bands shading
 
-### ai_agent.py -- AI Analysis
+### ai_agent.py - AI Analysis
 
 Builds structured JSON context from processed DataFrames and submits
 grounded prompts to the configured LLM provider.
 
-- `generate_trend_summary(data)` -- Per-asset trend and recent performance narrative
-- `generate_anomaly_report(data)` -- Outlier events and notable dates
-- `generate_risk_commentary(data)` -- Volatility-based risk assessment
-- `generate_comparison(data, tickers)` -- Side-by-side multi-asset comparison
-- `run_full_analysis(data)` -- Executes all four tasks and returns a result dict
+- `generate_trend_summary(data)` - Per-asset trend and recent performance narrative
+- `generate_anomaly_report(data)` - Outlier events and notable dates
+- `generate_risk_commentary(data)` - Volatility-based risk assessment
+- `generate_comparison(data, tickers)` - Side-by-side multi-asset comparison
+- `run_full_analysis(data)` - Executes all four tasks and returns a result dict
 
 ---
 
@@ -223,12 +227,12 @@ grounded prompts to the configured LLM provider.
 
 ## Visualisations
 
-| No. | Chart                         | Library         | Description                                        |
-|-----|-------------------------------|-----------------|----------------------------------------------------|
-| 1   | Price Trend + Volume          | Plotly          | Closing price with 7/30-day MA and volume bars     |
-| 2   | Correlation Heatmap           | Seaborn         | Pairwise return correlations across all assets     |
-| 3   | Returns Distribution          | Plotly/Seaborn  | Histogram and KDE of daily returns, normal overlay |
-| 4   | Rolling Stats/Bollinger Bands | Plotly          | SMA with upper and lower band shading              |
+| No. | Chart                         | Library        | Description                                        |
+|-----|-------------------------------|----------------|----------------------------------------------------|
+| 1   | Price Trend + Volume          | Plotly         | Closing price with 7/30-day MA and volume bars     |
+| 2   | Correlation Heatmap           | Seaborn        | Pairwise return correlations across all assets     |
+| 3   | Returns Distribution          | Plotly/Seaborn | Histogram and KDE of daily returns, normal overlay |
+| 4   | Rolling Stats/Bollinger Bands | Plotly         | SMA with upper and lower band shading              |
 
 ---
 
@@ -239,15 +243,18 @@ structured JSON prompt, instructing the model to reference specific figures
 in its output. This approach minimises hallucinations and ensures all
 commentary is grounded in the actual dataset.
 
+The default provider is Google Gemini (gemini-1.5-flash). Anthropic Claude
+and OpenAI GPT are available as alternatives via the --provider flag.
+
 Output categories:
 
-- **Trend Summary** -- Current trend and recent performance per asset, citing
+- **Trend Summary** - Current trend and recent performance per asset, citing
   closing prices, moving averages, and cumulative returns.
-- **Anomaly Report** -- Notable events or outlier dates identified in the
+- **Anomaly Report** - Notable events or outlier dates identified in the
   dataset, with magnitude and potential causes.
-- **Risk Commentary** -- Volatility-based risk assessment citing 30-day
+- **Risk Commentary** - Volatility-based risk assessment citing 30-day
   annualised volatility and drawdown figures.
-- **Comparison** -- Side-by-side narrative comparing two or more assets
+- **Comparison** - Side-by-side narrative comparing two or more assets
   across return, volatility, and trend dimensions.
 
 Disclaimer: AI-generated outputs are for educational purposes only and do
@@ -263,6 +270,3 @@ not constitute financial advice.
 | TBD    | Data Processing and Feature Engineering |
 | TBD    | Visualisation and Dashboard             |
 | TBD    | AI Analysis and Report Writing          |
-
----
-

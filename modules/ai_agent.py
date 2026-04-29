@@ -5,6 +5,7 @@ Integrates a Large Language Model (LLM) to produce automated natural language
 analysis of processed financial data.
 
 Supported providers (configured via .env):
+  - Google Gemini     (GEMINI_API_KEY)       [default]
   - Anthropic Claude  (ANTHROPIC_API_KEY)
   - OpenAI GPT        (OPENAI_API_KEY)
 
@@ -37,27 +38,41 @@ class AIAgent:
 
     Parameters
     ----------
-    provider : {'anthropic', 'openai'}
-        LLM provider to use.  The corresponding API key must be set in .env.
+    provider : {'gemini', 'anthropic', 'openai'}
+        LLM provider to use. The corresponding API key must be set in .env.
+        Defaults to 'gemini'.
     model : str, optional
-        Model identifier.
-        Defaults to 'claude-3-5-sonnet-20241022' (Anthropic) or
-        'gpt-4o' (OpenAI) depending on provider.
+        Model identifier. Defaults per provider:
+          - gemini    : 'gemini-1.5-flash'
+          - anthropic : 'claude-3-5-sonnet-20241022'
+          - openai    : 'gpt-4o'
     max_tokens : int
         Maximum tokens to generate per response.
     """
 
-    _DEFAULT_MODELS = {
+    _DEFAULT_MODELS: dict[str, str] = {
+        "gemini":    "gemini-1.5-flash",
         "anthropic": "claude-3-5-sonnet-20241022",
-        "openai": "gpt-4o",
+        "openai":    "gpt-4o",
+    }
+
+    _ENV_KEYS: dict[str, str] = {
+        "gemini":    "GEMINI_API_KEY",
+        "anthropic": "ANTHROPIC_API_KEY",
+        "openai":    "OPENAI_API_KEY",
     }
 
     def __init__(
         self,
-        provider: str = "anthropic",
+        provider: str = "gemini",
         model: Optional[str] = None,
         max_tokens: int = 1024,
     ) -> None:
+        if provider.lower() not in self._DEFAULT_MODELS:
+            raise ValueError(
+                f"Unsupported provider '{provider}'. "
+                f"Choose from: {list(self._DEFAULT_MODELS.keys())}"
+            )
         self.provider = provider.lower()
         self.model = model or self._DEFAULT_MODELS[self.provider]
         self.max_tokens = max_tokens
@@ -73,7 +88,7 @@ class AIAgent:
 
         Returns
         -------
-        anthropic.Anthropic | openai.OpenAI
+        google.generativeai.GenerativeModel | anthropic.Anthropic | openai.OpenAI
             Authenticated SDK client.
 
         Raises
@@ -83,8 +98,29 @@ class AIAgent:
         ValueError
             If an unsupported provider is specified.
         """
-        # TODO: import anthropic / openai, read key from os.getenv, return client
-        raise NotImplementedError
+        env_var = self._ENV_KEYS[self.provider]
+        api_key = os.getenv(env_var)
+
+        if not api_key:
+            raise EnvironmentError(
+                f"API key not found. Please set '{env_var}' in your .env file."
+            )
+
+        if self.provider == "gemini":
+            # TODO: import google.generativeai as genai
+            #       genai.configure(api_key=api_key)
+            #       return genai.GenerativeModel(self.model)
+            raise NotImplementedError
+
+        if self.provider == "anthropic":
+            # TODO: import anthropic
+            #       return anthropic.Anthropic(api_key=api_key)
+            raise NotImplementedError
+
+        if self.provider == "openai":
+            # TODO: import openai
+            #       return openai.OpenAI(api_key=api_key)
+            raise NotImplementedError
 
     # ------------------------------------------------------------------
     # Context builder
@@ -220,21 +256,24 @@ class AIAgent:
         Parameters
         ----------
         system_prompt : str
-            System-level instruction that sets the model's persona and constraints.
+            System-level instruction that sets the model persona and constraints.
         user_prompt : str
             User message containing the structured data context and task.
 
         Returns
         -------
         str
-            Raw text content of the model's response.
+            Raw text content of the model response.
 
         Notes
         -----
         - Always include explicit instructions to reference specific numbers.
         - Add a disclaimer that outputs are not financial advice.
-        """
-        # TODO: branch on self.provider, call client.messages.create (Anthropic)
-        #       or client.chat.completions.create (OpenAI), return content text
-        raise NotImplementedError
 
+        Provider call patterns:
+          - gemini    : client.generate_content(system_prompt + user_prompt)
+          - anthropic : client.messages.create(...)
+          - openai    : client.chat.completions.create(...)
+        """
+        # TODO: branch on self.provider and call the appropriate SDK method
+        raise NotImplementedError
