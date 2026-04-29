@@ -6,7 +6,7 @@ IT Application in Banking and Finance - 2026
 FinAgent is an end-to-end pipeline that autonomously collects live financial
 data, cleans and engineers features, generates four categories of financial
 charts, and delivers LLM-powered natural language analysis via Google Gemini,
-Anthropic Claude, or OpenAI GPT.
+Anthropic Claude, Gemini or OpenAI GPT.
 
 ---
 
@@ -122,9 +122,6 @@ See [`.env.example`](.env.example) for the complete list of supported variables.
 | `ALPHA_VANTAGE_API_KEY` | Yes                  | Alpha Vantage API key               |
 
 Get your free Gemini API key at: https://aistudio.google.com/app/apikey
-
-**Important:** Never commit your `.env` file. It is listed in `.gitignore`
-and must remain local to each developer machine.
 
 ---
 
