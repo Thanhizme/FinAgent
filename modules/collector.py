@@ -43,11 +43,20 @@ class DataCollector:
         End date for historical data in 'YYYY-MM-DD' format.
     """
 
-    def __init__(self, tickers: list[str], start_date: str, end_date: str) -> None:
-        self.tickers = tickers
-        self.start_date = start_date
-        self.end_date = end_date
+    def __init__(
+        self,
+        tickers: list[str],
+        start_date: str,
+        end_date: str,
+        market: str = "GLOBAL",
+    ) -> None:
+        self.tickers      = tickers
+        self.start_date   = start_date
+        self.end_date     = end_date
+        self.market       = market.upper()  # "VN" or "GLOBAL"
         self.news_api_key = os.getenv("NEWS_API_KEY")
+        logger.info("DataCollector initialised | tickers=%s | market=%s | %s to %s",
+                    self.tickers, self.market, self.start_date, self.end_date)
 
     # ------------------------------------------------------------------
     # Stock Prices
@@ -222,9 +231,5 @@ class DataCollector:
             return filepath
         except Exception as e:
             logger.error("Error saving file %s: %s", filename, e)
-            return Nonegger.info(f"Saved raw data in: {filepath}")
-            return filepath
-        except Exception as e:
-            logger.error(f"Error while saving file {filename}: {e}")
             return None
 
