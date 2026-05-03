@@ -27,6 +27,7 @@ import argparse
 import logging
 import sys
 from datetime import datetime, timedelta
+from dateutil.relativedelta import relativedelta
 
 from modules import DataCollector, DataProcessor, DataVisualizer, AIAgent
 
@@ -49,9 +50,13 @@ logger = logging.getLogger(__name__)
 # Defaults
 # ---------------------------------------------------------------------------
 
-DEFAULT_TICKERS  = ["AAPL", "MSFT", "GOOGL", "NVDA"]
-DEFAULT_START    = (datetime.today() - timedelta(days=365)).strftime("%Y-%m-%d")
-DEFAULT_END      = datetime.today().strftime("%Y-%m-%d")
+_TODAY         = datetime.today()
+_YESTERDAY     = _TODAY - timedelta(days=1)
+_START_DEFAULT = _TODAY - relativedelta(months=18)      
+
+DEFAULT_TICKERS  = ["AAPL"]
+DEFAULT_END      = _YESTERDAY.strftime("%Y-%m-%d")      
+DEFAULT_START    = _START_DEFAULT.strftime("%Y-%m-%d")  
 DEFAULT_PROVIDER = "gemini"
 
 
@@ -75,13 +80,13 @@ def build_parser() -> argparse.ArgumentParser:
         "--start",
         default=DEFAULT_START,
         metavar="YYYY-MM-DD",
-        help="Historical data start date (default: 1 year ago).",
+        help="Historical data start date (default: 18 months ago).",
     )
     parser.add_argument(
         "--end",
         default=DEFAULT_END,
         metavar="YYYY-MM-DD",
-        help="Historical data end date (default: today).",
+        help="Historical data end date (default: yesterday).",
     )
     parser.add_argument(
         "--provider",
@@ -106,27 +111,112 @@ def run_collection(tickers: list[str], start: str, end: str) -> dict:
     logger.info("Stage 1: Data Collection")
     collector = DataCollector(tickers=tickers, start_date=start, end_date=end)
 
-    # TODO: call collector methods and store results
-    # raw_prices = collector.fetch_stock_prices()
-    # raw_news   = collector.fetch_news(query=" ".join(tickers))
-    # raw_macro  = collector.fetch_macro_indicators(["FX_DAILY"])
-
-    raw_data = {}  # placeholder
+    raw_data = {
+        "prices"      : collector.fetch_stock_prices(),
+        "benchmark"   : collector.fetch_benchmark(),
+        "peers"       : collector.fetch_peers(),
+        "fundamental" : collector.fetch_financial_statements(),
+        "macro"       : collector.fetch_macro_indicators(),
+        "industry"    : collector.fetch_industry_data(),
+        "news"        : collector.fetch_news(query=" ".join(tickers)),
+    }
     logger.info("Data collection complete - %d ticker(s) collected.", len(tickers))
     return raw_data
 
 
-def run_processing(raw_data: dict) -> dict[str, any]:
-    """Stage 2 - clean, normalise, and engineer features."""
+
+def build_processors(raw_data: dict) -> dict:
+    """
+    Wrapper
+    Returns dict:
+        prices      : { ticker: cleaned_df }
+        benchmark   : cleaned_df
+        peers       : { ticker: cleaned_df }
+        fundamental : { ticker: cleaned_df }
+        macro       : cleaned_df
+        industry    : cleaned_df
+    """
+    logger.info("Wrapper: build_processors() - bat dau clean toan bo data")
+    processed = {}
+
+    # 1. Price data
+    processed["prices"] = {}
+    for ticker, df in raw_data.get("prices", {}).items():
+        if df is not None and not df.empty:
+            logger.info("  Processing price: %s", ticker)
+            processed["prices"][ticker] = DataProcessor(df=df, ticker=ticker).run_pipeline()
+
+    # 2. Benchmark
+    bm_df = raw_data.get("benchmark")
+    if bm_df is not None and not bm_df.empty:
+        logger.info("  Processing benchmark")
+        processed["benchmark"] = DataProcessor(df=bm_df, ticker="benchmark").run_pipeline()
+
+    # 3. Peer data
+    processed["peers"] = {}
+    for ticker, df in raw_data.get("peers", {}).items():
+        if df is not None and not df.empty:
+            logger.info("  Processing peer: %s", ticker)
+            processed["peers"][ticker] = DataProcessor(df=df, ticker=ticker).run_pipeline()
+
+        # 4. Fundamental data - chi clean, khong run_pipeline (khong co cot close)
+    processed["fundamental"] = {}
+    for ticker, df in raw_data.get("fundamental", {}).items():
+        if df is not None and not df.empty:
+            logger.info("  Processing fundamental: %s", ticker)
+            p = DataProcessor(df=df, ticker=ticker)
+            p.normalise_types()
+            p.remove_duplicates()
+            p.handle_missing_values(strategy="ffill")
+            processed["fundamental"][ticker] = p.df
+
+    # 5. Macro - chi clean
+    macro_df = raw_data.get("macro")
+    if macro_df is not None and not macro_df.empty:
+        logger.info("  Processing macro indicators")
+        p = DataProcessor(df=macro_df, ticker="macro")
+        p.normalise_types()
+        p.remove_duplicates()
+        p.handle_missing_values(strategy="ffill")
+        processed["macro"] = p.df
+
+    # 6. Industry - chi clean
+    industry_df = raw_data.get("industry")
+    if industry_df is not None and not industry_df.empty:
+        logger.info("  Processing industry data")
+        p = DataProcessor(df=industry_df, ticker="industry")
+        p.normalise_types()
+        p.remove_duplicates()
+        p.handle_missing_values(strategy="ffill")
+        processed["industry"] = p.df
+
+    # NOTE: news va intraday khong qua DataProcessor
+    logger.info("Wrapper: build_processors() hoan tat.")
+    return processed
+
+
+def run_processing(raw_data: dict) -> dict:
+    """Stage 2 - clean, normalise, va engineer features qua wrapper build_processors."""
     logger.info("Stage 2: Data Processing")
-    processed_data = {}
 
-    for ticker, df in raw_data.items():
-        logger.info("Processing ticker: %s", ticker)
-        processor = DataProcessor(df=df, ticker=ticker)
-        # TODO: processed_data[ticker] = processor.run_pipeline()
+    processed_data = build_processors(raw_data)
+    benchmark_df = processed_data.get("benchmark")
+    peer_dfs     = list(processed_data.get("peers", {}).values())
 
-    logger.info("Processing complete - %d ticker(s) processed.", len(processed_data))
+    for ticker, df in processed_data.get("prices", {}).items():
+        processor    = DataProcessor(df=df, ticker=ticker)
+        processor.df = df
+
+        if benchmark_df is not None:
+            processor.calc_beta(benchmark_df)
+
+        if peer_dfs:
+            corr = processor.calc_correlation_matrix(peer_dfs)
+            processed_data.setdefault("correlation", {})[ticker] = corr
+
+        processed_data["prices"][ticker] = processor.df
+
+    logger.info("Processing complete.")
     return processed_data
 
 

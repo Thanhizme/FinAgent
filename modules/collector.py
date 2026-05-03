@@ -74,7 +74,7 @@ class DataCollector:
         "gold_price":    "GC=F",
         "oil_price":     "CL=F",
         "usd_vnd":       "USDVND=X",
-        "vnindex":       "^VNINDEX",
+        #"vnindex":       "^VNINDEX",
         "bond_yield":    "^TNX",
         "interest_rate": "^IRX",
     }
@@ -282,11 +282,12 @@ class DataCollector:
                     return df.loc[k]
             return pd.Series(dtype=float)
 
-        dates = []
+        dates = set()
         if income is not None and not income.empty:
-            dates = list(income.columns)
-        elif balance is not None and not balance.empty:
-            dates = list(balance.columns)
+            dates.update(income.columns)
+        if balance is not None and not balance.empty:
+            dates.update(balance.columns)
+        dates = sorted(list(dates), reverse=True)
 
         rows = []
         for date in dates:
@@ -295,19 +296,52 @@ class DataCollector:
                     v = s[_d]
                     return float(v) if pd.notna(v) else None
                 return None
+            
+            rev = _v(_row(income, "Total Revenue"))
+            net_inc = _v(_row(income, "Net Income"))
+            assets = _v(_row(balance, "Total Assets"))
+            equity = _v(_row(balance, "Stockholders Equity", "Common Stock Equity"))
+            debt = _v(_row(balance, "Total Debt"))
+            
+
+            if rev is None and net_inc is None and assets is None and equity is None:
+                continue
+
+
+            shares = _v(_row(balance, "Ordinary Shares Number", "Share Issued"))
+            if shares is None:
+                shares = _v(_row(income, "Basic Average Shares", "Diluted Average Shares"))
+
+            roe = (net_inc / equity) if (net_inc and equity and equity != 0) else None
+            roa = (net_inc / assets) if (net_inc and assets and assets != 0) else None
+            margin = (net_inc / rev) if (net_inc and rev and rev != 0) else None
+            debt_to_equity = (debt / equity) if (debt and equity and equity != 0) else None
+
+            bvps = (equity / shares) if (equity and shares and shares != 0) else None
+
+            eps = _v(_row(income, "Basic EPS", "Diluted EPS"))
+            if eps is None and net_inc is not None and shares is not None and shares != 0:
+                eps = net_inc / shares # Lợi nhuận ròng / Số cổ phiếu
+
             rows.append({
                 "date":               pd.Timestamp(date).strftime("%Y-%m-%d"),
                 "ticker":             ticker,
-                "revenue":            _v(_row(income,  "Total Revenue")),
-                "gross_profit":       _v(_row(income,  "Gross Profit")),
-                "operating_profit":   _v(_row(income,  "Operating Income", "Operating Revenue")),
-                "net_income":         _v(_row(income,  "Net Income")),
-                "eps":                _v(_row(income,  "Basic EPS", "Diluted EPS")),
-                "total_assets":       _v(_row(balance, "Total Assets")),
+                "revenue":            rev,
+                "gross_profit":       _v(_row(income, "Gross Profit")),
+                "operating_profit":   _v(_row(income, "Operating Income", "Operating Revenue")),
+                "net_income":         net_inc,
+                "eps":                eps,  
+                "total_assets":       assets,
                 "total_liabilities":  _v(_row(balance, "Total Liabilities Net Minority Interest")),
-                "equity":             _v(_row(balance, "Stockholders Equity", "Common Stock Equity")),
-                "total_debt":         _v(_row(balance, "Total Debt")),
+                "equity":             equity,
+                "total_debt":         debt,
                 "cash":               _v(_row(balance, "Cash And Cash Equivalents")),
+                "roe":                roe,
+                "roa":                roa,
+                "margin":             margin,
+                "debt_to_equity":     debt_to_equity,
+                "shares_outstanding": shares, 
+                "bvps":               bvps    
             })
 
         if not rows:
@@ -315,19 +349,13 @@ class DataCollector:
             return pd.DataFrame()
 
         df = pd.DataFrame(rows)
-
         def _i(k):
             v = info.get(k)
             return float(v) if v is not None else None
 
-        df["roe"]                = _i("returnOnEquity")
-        df["roa"]                = _i("returnOnAssets")
-        df["pe"]                 = _i("trailingPE")
-        df["pb"]                 = _i("priceToBook")
-        df["margin"]             = _i("profitMargins")
-        df["debt_to_equity"]     = _i("debtToEquity")
-        df["shares_outstanding"] = _i("sharesOutstanding")
-        df["bvps"]               = _i("bookValue")
+        import numpy as np
+        df["pe"]                 = np.nan 
+        df["pb"]                 = np.nan 
         df["dividend"]           = _i("dividendRate")
 
         cols = [
@@ -403,11 +431,10 @@ class DataCollector:
 
     def fetch_macro_indicators(self):
         """
-        Schema (macro_df): date, variable, value
-        Variables: gold_price, oil_price, usd_vnd, vnindex,
-                   bond_yield, interest_rate, inflation_cpi (NaN placeholder)
+        Schema (macro_df_wide): date, gold_price, oil_price, usd_vnd, bond_yield, interest_rate, inflation_cpi
         """
-        frames = []
+        data_frames = []
+        
         for variable, symbol in self._MACRO_TICKERS.items():
             logger.info("Fetching macro: %s (%s) ...", variable, symbol)
             try:
@@ -416,40 +443,41 @@ class DataCollector:
                 if raw.empty:
                     logger.warning("No data for macro %s (%s).", variable, symbol)
                     continue
+                
                 df = self._flatten(raw)
-                frames.append(pd.DataFrame({
-                    "date": df["date"], "variable": variable, "value": df["close"]
-                }))
-                logger.info("  -> %d rows for %s.", len(frames[-1]), variable)
+                df = df[["date", "close"]].rename(columns={"close": variable})
+                
+                df.set_index("date", inplace=True)
+                data_frames.append(df)
+                
             except Exception as e:
                 logger.error("Failed macro %s: %s", variable, e)
 
-        # inflation_cpi: not available on yfinance — NaN placeholder
-        if frames:
-            frames.append(pd.DataFrame({
-                "date":     frames[0]["date"].unique(),
-                "variable": "inflation_cpi",
-                "value":    float("nan"),
-            }))
-
-        if not frames:
+        if not data_frames:
             logger.warning("No macro data fetched.")
-            return pd.DataFrame(columns=["date", "variable", "value"])
+            return pd.DataFrame(columns=["date"])
 
-        df = pd.concat(frames, ignore_index=True)
-        df = df.sort_values(["date", "variable"]).reset_index(drop=True)
-        df = self._validate_df(df, "macro_df")
+        macro_df = pd.concat(data_frames, axis=1).reset_index()
+
+        macro_df = macro_df.sort_values("date").reset_index(drop=True)
+
+        # 3.inflation_cpi giữ chỗ (vì yfinance không có CPI)
+        macro_df["inflation_cpi"] = float("nan")
+
+        value_cols = [c for c in macro_df.columns if c != "date"]
+        macro_df[value_cols] = macro_df[value_cols].ffill()
+
+        df = self._validate_df(macro_df, "macro_df_wide")
         self._save_csv(df, "macro_indicators.csv")
-        logger.info("Macro fetched: %d rows, %d variables.", len(df), df["variable"].nunique())
+        logger.info("Macro fetched: %d rows (Wide Format converted).", len(df))
+        
         return df
 
-    # ------------------------------------------------------------------ F. Industry Data
+# ------------------------------------------------------------------ F. Industry Data
 
     def fetch_industry_data(self, peers=None):
         """
-        Schema (industry_df): date, industry_pe, industry_pb, industry_roe, industry_growth
-        Methodology: average trailingPE / priceToBook / returnOnEquity / revenueGrowth
-                     across sector peers, then broadcast over the full date range.
+        Schema (industry_df): date, industry_roe, industry_margin, industry_pe, industry_pb
         """
         if peers is None:
             primary = self.tickers[0] if self.tickers else ""
@@ -457,44 +485,65 @@ class DataCollector:
 
         if not peers:
             logger.warning("No peers for industry data - returning empty.")
-            return pd.DataFrame(columns=["date", "industry_pe", "industry_pb",
-                                         "industry_roe", "industry_growth"])
+            return pd.DataFrame(columns=["date", "industry_roe", "industry_margin"])
 
-        logger.info("Computing industry data from peers: %s ...", peers)
-        pe_vals, pb_vals, roe_vals, growth_vals = [], [], [], []
+        logger.info("Computing historical industry data from peers: %s ...", peers)
+        all_peer_data = []
+
         for ticker in peers:
             try:
-                info = yf.Ticker(ticker).info
-                if info.get("trailingPE"):    pe_vals.append(float(info["trailingPE"]))
-                if info.get("priceToBook"):   pb_vals.append(float(info["priceToBook"]))
-                if info.get("returnOnEquity"): roe_vals.append(float(info["returnOnEquity"]))
-                if info.get("revenueGrowth"):  growth_vals.append(float(info["revenueGrowth"]))
-                logger.info("  %s | PE=%s PB=%s ROE=%s Growth=%s", ticker,
-                            info.get("trailingPE"), info.get("priceToBook"),
-                            info.get("returnOnEquity"), info.get("revenueGrowth"))
+                t = yf.Ticker(ticker)
+                inc = t.quarterly_financials
+                bal = t.quarterly_balance_sheet
+
+                dates = set()
+                if inc is not None and not inc.empty: dates.update(inc.columns)
+                if bal is not None and not bal.empty: dates.update(bal.columns)
+                
+                for d in dates:
+                    def _v(df, key1, key2=None):
+                        if df is not None and d in df.columns:
+                            if key1 in df.index: return float(df.loc[key1, d]) if pd.notna(df.loc[key1, d]) else None
+                            if key2 and key2 in df.index: return float(df.loc[key2, d]) if pd.notna(df.loc[key2, d]) else None
+                        return None
+                    
+                    net_inc = _v(inc, "Net Income")
+                    rev = _v(inc, "Total Revenue")
+                    eq = _v(bal, "Stockholders Equity", "Common Stock Equity")
+                        
+                    roe = (net_inc / eq) if (net_inc and eq and eq != 0) else None
+                    margin = (net_inc / rev) if (net_inc and rev and rev != 0) else None
+                    
+                    if roe is not None or margin is not None:
+                        all_peer_data.append({
+                            "date": pd.Timestamp(d).strftime("%Y-%m-%d"),
+                            "roe": roe,
+                            "margin": margin
+                        })
             except Exception as e:
-                logger.error("Failed info for peer %s: %s", ticker, e)
+                logger.error("Failed historical data for peer %s: %s", ticker, e)
 
-        def _mean(lst):
-            return float(np.nanmean(lst)) if lst else float("nan")
+        if not all_peer_data:
+            logger.warning("No historical peer data found.")
+            return pd.DataFrame()
 
-        ip = _mean(pe_vals)
-        ib = _mean(pb_vals)
-        ir = _mean(roe_vals)
-        ig = _mean(growth_vals)
+        df_peers = pd.DataFrame(all_peer_data)
+        industry_df = df_peers.groupby('date').mean().reset_index()
+        
+        industry_df = industry_df.rename(columns={
+            "roe": "industry_roe",
+            "margin": "industry_margin"
+        })
 
-        df = pd.DataFrame({
-            "date":            pd.bdate_range(start=self.start_date, end=self.end_date),
-            "industry_pe":     ip,
-            "industry_pb":     ib,
-            "industry_roe":    ir,
-            "industry_growth": ig,
-        }).sort_values("date").reset_index(drop=True)
-
-        df = self._validate_df(df, "industry_df")
+        import numpy as np
+        industry_df["industry_pe"] = np.nan
+        industry_df["industry_pb"] = np.nan
+        
+        industry_df = industry_df.sort_values("date").reset_index(drop=True)
+        df = self._validate_df(industry_df, "industry_df")
         self._save_csv(df, "industry_data.csv")
-        logger.info("Industry: PE=%.2f PB=%.2f ROE=%.4f Growth=%.4f | %d rows.",
-                    ip, ib, ir, ig, len(df))
+        logger.info("Historical Industry data compiled: %d quarters.", len(df))
+        
         return df
 
     # ------------------------------------------------------------------ Intraday (Section 5)
