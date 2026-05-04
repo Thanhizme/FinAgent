@@ -1,4 +1,4 @@
-﻿"""
+"""
 main.py
 -------
 FinAgent - AI-Powered Financial Data Agent
@@ -159,7 +159,7 @@ def build_processors(raw_data: dict) -> dict:
             logger.info("  Processing peer: %s", ticker)
             processed["peers"][ticker] = DataProcessor(df=df, ticker=ticker).run_pipeline()
 
-        # 4. Fundamental data - chi clean, khong run_pipeline (khong co cot close)
+        # 4. Fundamental data - clean, normalise, save
     processed["fundamental"] = {}
     for ticker, df in raw_data.get("fundamental", {}).items():
         if df is not None and not df.empty:
@@ -168,9 +168,14 @@ def build_processors(raw_data: dict) -> dict:
             p.normalise_types()
             p.remove_duplicates()
             p.handle_missing_values(strategy="ffill")
+            all_nan = [c for c in p.df.columns if p.df[c].isna().all()]
+            if all_nan:
+                p.df = p.df.drop(columns=all_nan)
+                logger.info("  Dropped all-NaN columns for %s fundamental: %s", ticker, all_nan)
             processed["fundamental"][ticker] = p.df
+            p._save_csv(filename=f"{ticker}_fundamental_processed.csv")
 
-    # 5. Macro - chi clean
+    # 5. Macro - clean, normalise, save
     macro_df = raw_data.get("macro")
     if macro_df is not None and not macro_df.empty:
         logger.info("  Processing macro indicators")
@@ -179,8 +184,9 @@ def build_processors(raw_data: dict) -> dict:
         p.remove_duplicates()
         p.handle_missing_values(strategy="ffill")
         processed["macro"] = p.df
+        p._save_csv(filename="macro_processed.csv")
 
-    # 6. Industry - chi clean
+    # 6. Industry - clean, normalise, save
     industry_df = raw_data.get("industry")
     if industry_df is not None and not industry_df.empty:
         logger.info("  Processing industry data")
@@ -188,9 +194,22 @@ def build_processors(raw_data: dict) -> dict:
         p.normalise_types()
         p.remove_duplicates()
         p.handle_missing_values(strategy="ffill")
+        all_nan = [c for c in p.df.columns if p.df[c].isna().all()]
+        if all_nan:
+            p.df = p.df.drop(columns=all_nan)
+            logger.info("  Dropped all-NaN columns for industry: %s", all_nan)
         processed["industry"] = p.df
+        p._save_csv(filename="industry_processed.csv")
 
-    # NOTE: news va intraday khong qua DataProcessor
+    # 7. News - clean, encode sentiment, save
+    news_df = raw_data.get("news")
+    if news_df is not None and not news_df.empty:
+        logger.info("  Processing news/sentiment data")
+        p = DataProcessor(df=news_df, ticker="news")
+        p.process_news()
+        processed["news"] = p.df
+        p._save_csv(filename="news_processed.csv")
+
     logger.info("Wrapper: build_processors() hoan tat.")
     return processed
 
@@ -201,20 +220,53 @@ def run_processing(raw_data: dict) -> dict:
 
     processed_data = build_processors(raw_data)
     benchmark_df = processed_data.get("benchmark")
-    peer_dfs     = list(processed_data.get("peers", {}).values())
+    peer_frames = processed_data.get("peers", {})
+    price_frames = processed_data.get("prices", {})
 
-    for ticker, df in processed_data.get("prices", {}).items():
-        processor    = DataProcessor(df=df, ticker=ticker)
-        processor.df = df
+    def enrich_and_save(collection_key: str, ticker: str, df, comparison_frames: list) -> None:
+        processor = DataProcessor(df=df, ticker=ticker)
+        processor.df = df.copy()
 
         if benchmark_df is not None:
             processor.calc_beta(benchmark_df)
+            processor.calc_relative_strength(benchmark_df)
 
-        if peer_dfs:
-            corr = processor.calc_correlation_matrix(peer_dfs)
-            processed_data.setdefault("correlation", {})[ticker] = corr
+        if comparison_frames:
+            processed_data.setdefault("correlation", {})[ticker] = processor.calc_correlation_matrix(comparison_frames)
 
-        processed_data["prices"][ticker] = processor.df
+        processor._save_csv()
+        processed_data[collection_key][ticker] = processor.df
+
+    for ticker, df in price_frames.items():
+        comparison_frames = []
+        if benchmark_df is not None:
+            comparison_frames.append(benchmark_df)
+        comparison_frames.extend(other_df for other_ticker, other_df in peer_frames.items() if other_ticker != ticker)
+        enrich_and_save("prices", ticker, df, comparison_frames)
+
+    for ticker, df in peer_frames.items():
+        comparison_frames = []
+        if benchmark_df is not None:
+            comparison_frames.append(benchmark_df)
+        comparison_frames.extend(other_df for other_ticker, other_df in peer_frames.items() if other_ticker != ticker)
+        comparison_frames.extend(other_df for other_ticker, other_df in price_frames.items() if other_ticker != ticker)
+        enrich_and_save("peers", ticker, df, comparison_frames)
+
+    if benchmark_df is not None:
+        benchmark_processor = DataProcessor(df=benchmark_df, ticker="benchmark")
+        benchmark_processor.df = benchmark_df.copy()
+        benchmark_processor.df["beta"] = 1.0
+        benchmark_processor.df["relative_strength"] = 1.0
+        all_null_columns = [
+            column
+            for column in benchmark_processor.df.columns
+            if benchmark_processor.df[column].isna().all()
+        ]
+        if all_null_columns:
+            logger.info("Dropping benchmark all-null columns before save: %s", all_null_columns)
+            benchmark_processor.df = benchmark_processor.df.drop(columns=all_null_columns)
+        benchmark_processor._save_csv()
+        processed_data["benchmark"] = benchmark_processor.df
 
     logger.info("Processing complete.")
     return processed_data

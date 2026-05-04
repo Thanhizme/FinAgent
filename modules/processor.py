@@ -1,4 +1,4 @@
-﻿"""
+"""
 processor.py
 ------------
 Handles all data cleaning, normalisation, and feature engineering steps
@@ -20,10 +20,17 @@ from pathlib import Path
 import pandas as pd
 import numpy as np
 
+from ta.momentum import RSIIndicator
+from ta.trend import MACD
+from ta.volatility import AverageTrueRange
+
 logger = logging.getLogger(__name__)
 
 PROCESSED_DATA_DIR = Path(__file__).resolve().parents[1] / "data" / "processed"
 PROCESSED_DATA_DIR.mkdir(parents=True, exist_ok=True)
+
+ROLLING_BETA_WINDOW = 60
+ROLLING_SHARPE_WINDOW = 252
 
 
 class DataProcessor:
@@ -125,14 +132,25 @@ class DataProcessor:
         self.df = self.df.sort_values('date')
         self.df = self.df.reset_index(drop=True)
         
-        numeric_cols = ['open', 'high', 'low', 'close', 'adj_close', 'volume']
-        for c in numeric_cols:
+        ohlcv_cols = ['open', 'high', 'low', 'close', 'adj_close', 'volume']
+        for c in ohlcv_cols:
             if c not in self.df.columns:
                 continue
             if self.df[c].dtype == object:
                 self.df[c] = self.df[c].apply(parse_currency)
             self.df[c] = pd.to_numeric(self.df[c], errors='coerce').astype('float64')
-        
+
+        # Auto-cast remaining numeric-like columns (fundamental, macro, industry, etc.)
+        _TEXT_COLS = {'ticker', 'headline', 'summary', 'source', 'sentiment', 'event_type'}
+        ohlcv_set = set(ohlcv_cols)
+        for c in self.df.columns:
+            if c == 'date' or c in _TEXT_COLS or c in ohlcv_set:
+                continue
+            if self.df[c].dtype == object:
+                converted = pd.to_numeric(self.df[c], errors='coerce')
+                if converted.notna().mean() > 0.3:
+                    self.df[c] = converted.astype('float64')
+
         logger.info('[%s] dtypes after normalise:\n%s', self.ticker, self.df.dtypes.to_string())
         return self
 
@@ -163,16 +181,33 @@ class DataProcessor:
         Flagged rows are marked in a boolean column ``is_outlier`` rather than
         being silently dropped, preserving data integrity for downstream review.
         """
-        # TODO: implement IQR / Z-score logic; add 'is_outlier' boolean column
+        if 'close' not in self.df.columns:
+            self.df['is_outlier'] = False
+            logger.info("[%s] No close column available for outlier detection", self.ticker)
+            return self
+
         if method == "iqr":
-            q1 = self.df['close'].quantile(0.25)
-            q3 = self.df['close'].quantile(0.75)
+            change_series = self.df['daily_return'] if 'daily_return' in self.df.columns else self.df['close'].pct_change()
+            valid_changes = change_series.dropna()
+
+            if valid_changes.empty:
+                self.df['is_outlier'] = False
+                logger.info("[%s] No valid returns available for outlier detection", self.ticker)
+                return self
+
+            q1 = valid_changes.quantile(0.25)
+            q3 = valid_changes.quantile(0.75)
             iqr = q3 - q1
-            lower_bound = q1 - threshold*iqr
-            upper_bound = q3 + threshold*iqr
-            self.df['is_outlier'] = (self.df['close'] < lower_bound) | (self.df['close'] > upper_bound)
-            outlier_count = self.df['is_outlier'].sum()
-            logger.info(f"[{self.ticker}] Found {outlier_count} outliers using {method}")
+            lower_bound = q1 - threshold * iqr
+            upper_bound = q3 + threshold * iqr
+            self.df['is_outlier'] = ((change_series < lower_bound) | (change_series > upper_bound)).fillna(False)
+            outlier_count = int(self.df['is_outlier'].sum())
+            logger.info(
+                "[%s] Found %d outliers using %s on daily returns",
+                self.ticker,
+                outlier_count,
+                method,
+            )
             return self
         elif method == "zscore":
             raise ValueError(f"Method will be implemented later")
@@ -273,6 +308,42 @@ class DataProcessor:
         self.df['bb_lower'] = self.df['ma20'] - 2*std20
         logger.info(f"[{self.ticker}] Bollinger Bands done | bb_upper mean={self.df['bb_upper'].mean():.4f} | bb_lower mean={self.df['bb_lower'].mean():.4f}")
         return self
+    
+    # ------------------------------------------------------------------
+    # C2. Momentum Oscillators & ATR (NEW)
+    # ------------------------------------------------------------------
+
+    def calc_momentum_oscillators(self) -> "DataProcessor":
+        """Calculate RSI and MACD using the 'ta' library."""
+        # 1. RSI (14-day)
+        self.df['rsi_14'] = RSIIndicator(close=self.df['close'], window=14).rsi()
+        
+        # 2. MACD
+        macd = MACD(close=self.df['close'], window_slow=26, window_fast=12, window_sign=9)
+        self.df['macd_line'] = macd.macd()
+        self.df['macd_signal'] = macd.macd_signal()
+        self.df['macd_hist'] = macd.macd_diff()
+        
+        logger.info(f"[{self.ticker}] Momentum Oscillators done | RSI, MACD added")
+        return self
+
+    def calc_atr(self) -> "DataProcessor":
+        """Calculate Average True Range (14-day) for Stoploss sizing."""
+        if not all(col in self.df.columns for col in ['high', 'low', 'close']):
+            logger.warning(f"[{self.ticker}] Missing high/low/close cols for ATR. Setting atr_14 = NaN.")
+            self.df["atr_14"] = float("nan")
+            return self
+            
+        atr_indicator = AverageTrueRange(
+            high=self.df['high'], 
+            low=self.df['low'], 
+            close=self.df['close'], 
+            window=14
+        )
+        self.df['atr_14'] = atr_indicator.average_true_range()
+        logger.info(f"[{self.ticker}] ATR (14) done")
+        return self
+    
     # ------------------------------------------------------------------
     # D. Performance & Risk
     # ------------------------------------------------------------------
@@ -281,23 +352,34 @@ class DataProcessor:
         # TODO: rolling_max = close.cummax()
         # TODO: drawdown = (close - rolling_max) / rolling_max
         rolling_max = self.df['close'].cummax()
-        self.df['drawdown'] = (self.df['close'] - rolling_max)/rolling_max
-        max_drawdown = self.df['drawdown'].min()
-        self.df['max_drawdown'] = max_drawdown
+        self.df['drawdown'] = (self.df['close'] - rolling_max) / rolling_max
+        self.df['max_drawdown'] = self.df['drawdown'].cummin()
+        max_drawdown = self.df['max_drawdown'].min()
         logger.info(f"[{self.ticker}] max_drawdown = {max_drawdown:.4f}")
         return self
     #
-    def calc_sharpe_ratio(self, trading_days: int = 252) -> "DataProcessor":
+    def calc_sharpe_ratio(self, trading_days: int = 252, window: int = ROLLING_SHARPE_WINDOW) -> "DataProcessor":
         # TODO: sharpe = mean(daily_return) / std(daily_return) * sqrt(trading_days)
         # Yeu cau: calc_returns() chay truoc
         if 'daily_return' not in self.df.columns:
             raise RuntimeError(f"calc_returns() must be called before calc_sharpe_ratio()")
-        sharpe = self.df['daily_return'].mean() / self.df['daily_return'].std() * np.sqrt(trading_days) 
-        self.df['sharpe_ratio'] = sharpe
-        logger.info(f"[{self.ticker}] sharpe_ratio = {sharpe:.4f}")
+
+        rolling_mean = self.df['daily_return'].rolling(window=window, min_periods=window).mean()
+        rolling_std = self.df['daily_return'].rolling(window=window, min_periods=window).std()
+        annualized_return = rolling_mean * trading_days
+        annualized_volatility = rolling_std * np.sqrt(trading_days)
+        sharpe_series = annualized_return / annualized_volatility.replace(0, np.nan)
+        self.df['sharpe_ratio'] = sharpe_series.replace([np.inf, -np.inf], np.nan)
+
+        latest_sharpe = self.df['sharpe_ratio'].dropna()
+        logger.info(
+            "[%s] rolling sharpe_ratio computed | latest=%s",
+            self.ticker,
+            f"{latest_sharpe.iloc[-1]:.4f}" if not latest_sharpe.empty else "nan",
+        )
         return self
 
-    def calc_beta(self, benchmark_df) -> "DataProcessor":
+    def calc_beta(self, benchmark_df, window: int = ROLLING_BETA_WINDOW) -> "DataProcessor":
         # TODO: beta = Cov(r_stock, r_market) / Var(r_market)
         # benchmark_df phai co cot daily_return
         # Yeu cau: calc_returns() chay truoc
@@ -306,16 +388,24 @@ class DataProcessor:
         if 'daily_return' not in benchmark_df.columns:
             raise RuntimeError(f"calc_returns() must be called before calc_beta()")
         merged = pd.merge(
-        self.df[['date', 'daily_return']],
-        benchmark_df[['date', 'daily_return']],
-        on='date',
-        suffixes=('_stock', '_market')
+            self.df[['date', 'daily_return']],
+            benchmark_df[['date', 'daily_return']],
+            on='date',
+            how='left',
+            suffixes=('_stock', '_market')
         )
-        cov = float(merged['daily_return_stock'].cov(merged['daily_return_market']))
-        var = merged['daily_return_market'].var()
-        beta = cov/var
-        self.df['beta'] = beta
-        logger.info(f"[{self.ticker}] beta = {beta:.4f}")
+
+        rolling_cov = merged['daily_return_stock'].rolling(window=window, min_periods=window).cov(merged['daily_return_market'])
+        rolling_var = merged['daily_return_market'].rolling(window=window, min_periods=window).var()
+        beta_series = (rolling_cov / rolling_var.replace(0, np.nan)).replace([np.inf, -np.inf], np.nan)
+        self.df['beta'] = beta_series.values
+
+        latest_beta = self.df['beta'].dropna()
+        logger.info(
+            "[%s] rolling beta computed | latest=%s",
+            self.ticker,
+            f"{latest_beta.iloc[-1]:.4f}" if not latest_beta.empty else "nan",
+        )
         return self
 
 
@@ -344,21 +434,143 @@ class DataProcessor:
         # TODO: relative_strength = cum_return_self / cum_return_other
         # other_df phai co cot close va ticker
         # Yeu cau: calc_cumulative_returns() chay truoc
-        if 'cum_return_7' not in self.df.columns:
-            raise RuntimeError("calc_cumulative_returns() must be called before calc_relative_strength()")
-    
-        if 'close' not in other_df.columns:
+        if "close" not in other_df.columns:
             raise ValueError("other_df must contain 'close' column to calculate relative strength")
-        cum_other = (other_df['close'] / other_df['close'].iloc[0]) - 1
-        other_tmp = pd.DataFrame({
-            'date': other_df['date'],
-            'cum_other': cum_other
-        })
-        merged = pd.merge(self.df, other_tmp, on='date', how='left')
-        merged['relative_strength'] = (1 + merged['cum_return']) / (1 + merged['cum_other'])
-        self.df['relative_strength'] = merged['relative_strength']
-        ticker_other = other_df['ticker'].iloc[0] if 'ticker' in other_df.columns else "Benchmark"
+        if "close" not in self.df.columns:
+            raise ValueError("self.df must contain 'close' column to calculate relative strength")
+
+        # Tinh cum_return inline - khong phu thuoc engineer_features()
+        cum_self  = self.df["close"] / self.df["close"].iloc[0] - 1
+        cum_other = other_df["close"] / other_df["close"].iloc[0] - 1
+
+        other_tmp = pd.DataFrame({"date": other_df["date"].values, "cum_other": cum_other.values})
+        tmp       = pd.DataFrame({"date": self.df["date"].values,  "cum_self":  cum_self.values})
+        merged    = pd.merge(tmp, other_tmp, on="date", how="left")
+        merged["cum_other"] = merged["cum_other"].ffill().bfill()
+
+        self.df = self.df.copy()
+        self.df["relative_strength"] = (1.0 + merged["cum_self"]) / (1.0 + merged["cum_other"])
+        ticker_other = other_df["ticker"].iloc[0] if "ticker" in other_df.columns else "Benchmark"
         logger.info("[%s] calc_relative_strength done | Compared with %s", self.ticker, ticker_other)
+        return self
+
+    # ------------------------------------------------------------------
+    # News / Sentiment processing
+    # ------------------------------------------------------------------
+
+    def process_news(self) -> "DataProcessor":
+        """
+        Clean, encode, and aggregate a news/sentiment DataFrame.
+
+        Operations
+        ----------
+        - Normalise date column and sort chronologically.
+        - Remove exact duplicate records on (date, ticker, headline).
+        - Normalise sentiment labels to lowercase stripped strings.
+        - Encode ``sentiment_score``: positive=1, neutral=0, negative=-1.
+        - Normalise event_type to lowercase.
+        - Aggregate to one row per (date, ticker) for safe downstream joins.
+
+        Returns
+        -------
+        DataProcessor
+            Self, for method chaining.
+        """
+        self.df['date'] = pd.to_datetime(self.df['date'])
+        self.df = self.df.sort_values('date').reset_index(drop=True)
+
+        dup_cols = [c for c in ['date', 'ticker', 'headline'] if c in self.df.columns]
+        dup_count = self.df.duplicated(subset=dup_cols).sum()
+        self.df = self.df.drop_duplicates(subset=dup_cols).reset_index(drop=True)
+        logger.info("[%s] News: removed %d duplicate records", self.ticker, dup_count)
+
+        # headline is required — fill NaN with empty string to prevent downstream errors
+        if 'headline' in self.df.columns:
+            self.df['headline'] = self.df['headline'].fillna('').astype(str).str.strip()
+        # summary and source are optional fields; leave legitimate NaN values intact
+        for col in ['summary', 'source']:
+            if col in self.df.columns:
+                self.df[col] = self.df[col].astype(str).str.strip().replace('nan', pd.NA)
+
+        if 'sentiment' in self.df.columns:
+            self.df['sentiment'] = (
+                self.df['sentiment']
+                .fillna('neutral')
+                .astype(str)
+                .str.lower()
+                .str.strip()
+            )
+            sentiment_map = {'positive': 1, 'neutral': 0, 'negative': -1}
+            self.df['sentiment_score'] = (
+                self.df['sentiment'].map(sentiment_map).fillna(0).astype(int)
+            )
+            logger.info(
+                "[%s] News sentiment distribution:\n%s",
+                self.ticker,
+                self.df['sentiment'].value_counts().to_string(),
+            )
+
+        if 'event_type' in self.df.columns:
+            self.df['event_type'] = (
+                self.df['event_type'].fillna('general').astype(str).str.lower().str.strip()
+            )
+
+        def latest_non_empty(series: pd.Series):
+            cleaned = series.dropna().astype(str).str.strip()
+            cleaned = cleaned[cleaned.ne("")]
+            if cleaned.empty:
+                return pd.NA
+            return cleaned.iloc[-1]
+
+        def join_unique(series: pd.Series):
+            cleaned = []
+            for value in series.dropna().astype(str).str.strip():
+                if value and value not in cleaned:
+                    cleaned.append(value)
+            if not cleaned:
+                return pd.NA
+            return " | ".join(cleaned)
+
+        def dominant_label(avg_score: float) -> str:
+            if avg_score > 0:
+                return "positive"
+            if avg_score < 0:
+                return "negative"
+            return "neutral"
+
+        def dominant_event(series: pd.Series) -> str:
+            non_general = series[series.ne("general")]
+            target = non_general if not non_general.empty else series
+            return target.mode().iloc[0]
+
+        grouped = self.df.groupby(['date', 'ticker'], as_index=False)
+        self.df = grouped.agg(
+            article_count=('headline', 'size'),
+            headline=('headline', latest_non_empty),
+            summary=('summary', latest_non_empty),
+            source=('source', join_unique),
+            sentiment_score=('sentiment_score', 'mean'),
+            positive_count=('sentiment_score', lambda s: int((s > 0).sum())),
+            neutral_count=('sentiment_score', lambda s: int((s == 0).sum())),
+            negative_count=('sentiment_score', lambda s: int((s < 0).sum())),
+            event_type=('event_type', dominant_event),
+        )
+        self.df['sentiment_score'] = self.df['sentiment_score'].astype(float)
+        self.df['sentiment'] = self.df['sentiment_score'].apply(dominant_label)
+        self.df = self.df[
+            [
+                'date', 'ticker', 'article_count', 'headline', 'summary', 'source',
+                'sentiment', 'sentiment_score', 'positive_count', 'neutral_count',
+                'negative_count', 'event_type'
+            ]
+        ].sort_values(['date', 'ticker']).reset_index(drop=True)
+
+        logger.info(
+            "[%s] process_news() done | %d daily records from %d articles",
+            self.ticker,
+            len(self.df),
+            int(self.df['article_count'].sum()),
+        )
         return self
 
     # ------------------------------------------------------------------
@@ -379,35 +591,33 @@ class DataProcessor:
         Returns
         -------
         pd.DataFrame
-            Fully processed DataFrame, also saved to data/processed/.
+            Fully processed DataFrame.
         """
-        # TODO: chain all steps, call _save_csv at the end
         # Step 1: Cleaning
         self.normalise_types()
         self.remove_duplicates()
-        self.df = self.df.ffill()
-        self.df = self.df.dropna()          # xoá ~200 row đầu chưa đủ dữ liệu rolling
-        self.df = self.df.reset_index(drop=True)
-        self.detect_outliers(method="iqr")
+        self.handle_missing_values(strategy="ffill")
 
         # Step 2: Feature engineering (rolling windows sẽ tạo NaN đầu chuỗi)
         self.calc_returns()
+        self.detect_outliers(method="iqr")
         self.calc_cumulative_returns()
         self.calc_moving_averages()
         self.calc_volatility()
         self.calc_bollinger_bands()
         self.calc_max_drawdown()
+        self.calc_momentum_oscillators()
+        self.calc_atr()
         self.calc_sharpe_ratio()
 
-        # Step 3: Pass 2 - fill NaN sinh ra bởi rolling windows (ma200, bb, v.v.)
-        self.df = self.df.ffill()
-        self.df = self.df.dropna()
-        self.df = self.df.reset_index(drop=True)
-        target_start = pd.Timestamp.today() - pd.DateOffset(months=18)
-        self.df = self.df[self.df['date'] >= target_start].reset_index(drop=True)
+        # NOTE: beta va relative_strength duoc tinh sau trong run_processing()
+        # vi can benchmark_df tu ben ngoai.
+        return self.df
 
-        # Step 4: Save to disk
-        filepath = self._save_csv()
+    def run_pipeline_and_save(self) -> "pd.DataFrame":
+        """Chay pipeline va luu CSV ngay (dung khi khong can beta/RS)."""
+        self.run_pipeline()
+        self._save_csv()
         return self.df
 
     # ------------------------------------------------------------------

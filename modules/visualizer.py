@@ -69,7 +69,7 @@ class DataVisualizer:
 
         Notes
         -----
-        Expected columns in the DataFrame: Open, High, Low, Close, Volume.
+        Expected columns in the DataFrame: open, high, low, close, volume.
         """
         # TODO: build Plotly (or matplotlib) figure with two subplots:
         #       - top: price trace (line / candlestick / OHLC)
