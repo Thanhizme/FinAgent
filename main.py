@@ -27,6 +27,8 @@ import argparse
 import logging
 import sys
 from datetime import datetime, timedelta
+
+import pandas as pd
 from dateutil.relativedelta import relativedelta
 
 from modules import DataCollector, DataProcessor, DataVisualizer, AIAgent
@@ -54,10 +56,68 @@ _TODAY         = datetime.today()
 _YESTERDAY     = _TODAY - timedelta(days=1)
 _START_DEFAULT = _TODAY - relativedelta(months=30)      
 
-DEFAULT_TICKERS  = ["AAPL"]
+DEFAULT_TICKERS  = ["V"]
 DEFAULT_END      = _YESTERDAY.strftime("%Y-%m-%d")      
 DEFAULT_START    = _START_DEFAULT.strftime("%Y-%m-%d")  
 DEFAULT_PROVIDER = "gemini"
+
+SUGGESTED_TICKERS = [
+    "AAPL", "MSFT", "GOOGL", "AMZN", "TSLA", "V", "JPM", "META",
+    "FPT", "VCB", "VHM", "HPG",
+]
+
+
+def _parse_ticker_input(raw_value: str) -> list[str]:
+    """Parse tickers from a comma/space-separated terminal input string."""
+    parts = raw_value.replace(",", " ").split()
+    cleaned = []
+    for item in parts:
+        ticker = item.strip().upper()
+        if ticker and ticker not in cleaned:
+            cleaned.append(ticker)
+    return cleaned
+
+
+def prompt_tickers_from_terminal(default_tickers: list[str]) -> list[str]:
+    """Prompt users for ticker selection when --tickers is not provided."""
+    if not sys.stdin.isatty():
+        logger.info("Non-interactive terminal detected, using default tickers: %s", default_tickers)
+        return default_tickers
+
+    print("\nTicker Selection")
+    print("1) Use default ticker(s):", ", ".join(default_tickers))
+    print("2) Pick from suggested list")
+    print("3) Enter custom ticker(s)")
+
+    choice = input("Choose option [1/2/3] (default=1): ").strip() or "1"
+
+    if choice == "2":
+        print("\nSuggested tickers:")
+        for idx, ticker in enumerate(SUGGESTED_TICKERS, start=1):
+            print(f"  {idx:>2}. {ticker}")
+        raw_idx = input("Enter one or more indexes (e.g. 1 6 10): ").strip()
+        selected = []
+        for part in raw_idx.replace(",", " ").split():
+            if part.isdigit():
+                index = int(part)
+                if 1 <= index <= len(SUGGESTED_TICKERS):
+                    ticker = SUGGESTED_TICKERS[index - 1]
+                    if ticker not in selected:
+                        selected.append(ticker)
+        if selected:
+            return selected
+        logger.warning("No valid index selected. Falling back to default tickers.")
+        return default_tickers
+
+    if choice == "3":
+        raw_tickers = input("Enter ticker(s), separated by comma or space: ").strip()
+        parsed = _parse_ticker_input(raw_tickers)
+        if parsed:
+            return parsed
+        logger.warning("No valid ticker entered. Falling back to default tickers.")
+        return default_tickers
+
+    return default_tickers
 
 
 # ---------------------------------------------------------------------------
@@ -72,9 +132,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--tickers",
         nargs="+",
-        default=DEFAULT_TICKERS,
+        default=None,
         metavar="TICKER",
-        help="One or more stock ticker symbols (default: %(default)s).",
+        help="One or more stock ticker symbols. If omitted, terminal will prompt.",
     )
     parser.add_argument(
         "--start",
@@ -209,6 +269,15 @@ def build_processors(raw_data: dict) -> dict:
         p.process_news()
         processed["news"] = p.df
         p._save_csv(filename="news_processed.csv")
+    elif news_df is not None:
+        processed["news"] = pd.DataFrame(
+            columns=[
+                "date", "ticker", "article_count", "headline", "summary", "source",
+                "sentiment", "sentiment_score", "positive_count", "neutral_count",
+                "negative_count", "event_type",
+            ]
+        )
+        DataProcessor(df=processed["news"], ticker="news")._save_csv(filename="news_processed.csv")
 
     logger.info("Wrapper: build_processors() hoan tat.")
     return processed
@@ -297,6 +366,8 @@ def run_ai_analysis(processed_data: dict, provider: str) -> dict[str, str]:
 def main() -> None:
     parser = build_parser()
     args = parser.parse_args()
+
+    args.tickers = [ticker.upper() for ticker in args.tickers] if args.tickers else prompt_tickers_from_terminal(DEFAULT_TICKERS)
 
     logger.info("FinAgent pipeline starting.")
     logger.info("Tickers : %s", args.tickers)

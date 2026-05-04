@@ -61,6 +61,9 @@ Thumbs.db
 .coverage
 htmlcov/
 coverage.xml
+tests/
+test_*.py
+*_test.py
 
 # --- Type checking ---
 .mypy_cache/

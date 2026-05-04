@@ -11,6 +11,7 @@ Sources:
 """
 
 import os
+import re
 import time
 import logging
 from pathlib import Path
@@ -155,6 +156,29 @@ class DataCollector:
         "macro":             ["fed", "inflation", "cpi", "gdp", "interest rate", "central bank"],
         "legal":             ["lawsuit", "regulatory", "sanction", "compliance", "fine", "penalty", "sec", "investigation", "fraud"],
     }
+    _NEWS_ENTITY_ALIASES = {
+        "AAPL": ["Apple", "Apple Inc"],
+        "MSFT": ["Microsoft", "Microsoft Corp"],
+        "JPM": ["JPMorgan", "JPMorgan Chase", "JPMorgan Chase & Co"],
+        "V": ["Visa", "Visa Inc"],
+        "SF": ["Stifel", "Stifel Financial"],
+        "JEF": ["Jefferies", "Jefferies Financial"],
+        "DFIN": ["Donnelley Financial", "Donnelley Financial Solutions"],
+        "VBTX": ["Veritex", "Veritex Holdings"],
+    }
+    _AMBIGUOUS_NEWS_TICKERS = {"V", "D", "GE", "F", "T"}
+    _NEWS_FINANCE_CONTEXT_KEYWORDS = [
+        "stock", "shares", "earnings", "revenue", "profit", "guidance",
+        "company", "corp", "inc", "bank", "financial", "finance",
+        "payment", "payments", "card", "cards", "merchant", "transaction",
+        "analyst", "wall street", "quarter", "results", "investor", "market",
+    ]
+    _NEWS_EXCLUSION_KEYWORDS = {
+        "V": [
+            "h-1b", "immigration", "passport", "tourist visa", "visa assistance",
+            "airport", "travel package", "luxury tour", "hotel", "trip",
+        ],
+    }
 
     # ------------------------------------------------------------------ init
 
@@ -167,6 +191,68 @@ class DataCollector:
         self.fred_api_key = os.getenv("FRED_API_KEY")
         logger.info("DataCollector initialised | tickers=%s | market=%s | %s to %s",
                     self.tickers, self.market, self.start_date, self.end_date)
+
+    def _get_news_search_terms(self, ticker: str) -> list[str]:
+        ticker = ticker.upper()
+        terms = [ticker]
+        aliases = self._NEWS_ENTITY_ALIASES.get(ticker, [])
+        for alias in aliases:
+            if alias not in terms:
+                terms.append(alias)
+        return terms
+
+    def _empty_news_frame(self) -> pd.DataFrame:
+        return pd.DataFrame(
+            columns=["date", "ticker", "headline", "summary", "source", "sentiment", "event_type"]
+        )
+
+    def _build_ticker_news_query(self, ticker: str, user_query: str | None = None) -> str:
+        terms = self._get_news_search_terms(ticker)
+        if len(ticker) <= 2 and len(terms) > 1:
+            # Single-character and other short tickers need company-name anchors.
+            return " OR ".join(f'"{term}"' if " " in term else term for term in terms[1:])
+
+        query_terms = [f'"{term}"' if " " in term else term for term in terms]
+        if user_query and ticker.upper() not in user_query.upper():
+            query_terms.append(f'"{user_query}"' if " " in user_query else user_query)
+        return " OR ".join(query_terms)
+
+    def _text_contains_term(self, text: str, term: str) -> bool:
+        text = text.lower()
+        term = term.lower()
+        if term.isalpha() and len(term) <= 5 and " " not in term:
+            return re.search(rf"\b{re.escape(term)}\b", text) is not None
+        return term in text
+
+    def _is_relevant_news_article(self, article: dict, ticker: str) -> bool:
+        text = " ".join(
+            [
+                article.get("title") or "",
+                article.get("description") or "",
+                article.get("content") or "",
+                ((article.get("source") or {}).get("name") or ""),
+            ]
+        ).lower()
+
+        terms = self._get_news_search_terms(ticker)
+        strong_terms = [term for term in terms if term.upper() != ticker.upper()]
+        alias_match = any(self._text_contains_term(text, term) for term in strong_terms)
+        ticker_match = self._text_contains_term(text, ticker)
+
+        exclusion_terms = self._NEWS_EXCLUSION_KEYWORDS.get(ticker.upper(), [])
+        if any(exclusion in text for exclusion in exclusion_terms):
+            return False
+
+        if ticker.upper() in self._AMBIGUOUS_NEWS_TICKERS:
+            finance_context = any(
+                self._text_contains_term(text, keyword)
+                for keyword in self._NEWS_FINANCE_CONTEXT_KEYWORDS
+            )
+            return alias_match and finance_context
+
+        if strong_terms:
+            return alias_match or ticker_match
+        return ticker_match
 
     # ------------------------------------------------------------------ helpers
 
@@ -434,31 +520,52 @@ class DataCollector:
             logger.error("NEWS_API_KEY not set in .env")
             return pd.DataFrame()
         try:
-            r = requests.get("https://newsapi.org/v2/everything", timeout=10, params={
-                "q": query, "pageSize": page_size,
-                "apiKey": self.news_api_key, "language": "en", "sortBy": "publishedAt",
-            })
-            r.raise_for_status()
-            articles = r.json().get("articles", [])
-            df = self._build_news(articles, query)
+            frames = []
+            for ticker in self.tickers:
+                ticker_query = self._build_ticker_news_query(ticker, query)
+                r = requests.get("https://newsapi.org/v2/everything", timeout=10, params={
+                    "q": ticker_query, "pageSize": page_size,
+                    "apiKey": self.news_api_key, "language": "en", "sortBy": "publishedAt",
+                })
+                r.raise_for_status()
+                articles = r.json().get("articles", [])
+                relevant_articles = [
+                    article for article in articles
+                    if self._is_relevant_news_article(article, ticker)
+                ]
+                logger.info(
+                    "News query for %s kept %d/%d relevant articles",
+                    ticker,
+                    len(relevant_articles),
+                    len(articles),
+                )
+                ticker_df = self._build_news(relevant_articles, ticker)
+                if ticker_df is not None and not ticker_df.empty:
+                    frames.append(ticker_df)
+
+            if not frames:
+                logger.warning("No relevant news articles found for tickers=%s", self.tickers)
+                empty_df = self._empty_news_frame()
+                filename_stub = "_".join(self.tickers[:3])
+                empty_df.to_csv(RAW_DATA_DIR / f"news_{filename_stub}.csv", index=False)
+                logger.info("Saved empty raw data -> %s", RAW_DATA_DIR / f"news_{filename_stub}.csv")
+                return empty_df
+
+            df = pd.concat(frames, ignore_index=True)
             df = self._validate_df(df, "news_df")
-            self._save_csv(df, f"news_{query[:30].replace(' ', '_')}.csv")
-            logger.info("Fetched %d articles for query '%s'.", len(df), query)
+            filename_stub = "_".join(self.tickers[:3])
+            self._save_csv(df, f"news_{filename_stub}.csv")
+            logger.info("Fetched %d relevant articles for tickers=%s.", len(df), self.tickers)
             return df
         except Exception as e:
             logger.error("NewsAPI error: %s", e)
             return pd.DataFrame()
 
-    def _build_news(self, articles, query):
+    def _build_news(self, articles, ticker):
         rows = []
         for a in articles:
             headline = a.get("title") or ""
             hl = headline.lower()
-            ticker = "GENERAL"
-            for t in self.tickers:
-                if t.lower() in hl or t.lower() in query.lower():
-                    ticker = t
-                    break
             sentiment = "neutral"
             if any(k in hl for k in self._SENTIMENT_POSITIVE):
                 sentiment = "positive"
