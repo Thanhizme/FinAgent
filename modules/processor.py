@@ -403,6 +403,8 @@ class DataProcessor:
         self.df = self.df.ffill()
         self.df = self.df.dropna()
         self.df = self.df.reset_index(drop=True)
+        target_start = pd.Timestamp.today() - pd.DateOffset(months=18)
+        self.df = self.df[self.df['date'] >= target_start].reset_index(drop=True)
 
         # Step 4: Save to disk
         filepath = self._save_csv()

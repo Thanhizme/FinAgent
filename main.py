@@ -52,7 +52,7 @@ logger = logging.getLogger(__name__)
 
 _TODAY         = datetime.today()
 _YESTERDAY     = _TODAY - timedelta(days=1)
-_START_DEFAULT = _TODAY - relativedelta(months=18)      
+_START_DEFAULT = _TODAY - relativedelta(months=30)      
 
 DEFAULT_TICKERS  = ["AAPL"]
 DEFAULT_END      = _YESTERDAY.strftime("%Y-%m-%d")      

@@ -49,25 +49,80 @@ class DataCollector:
     }
 
     _PEER_MAP = {
-        # Global Tech
-        "AAPL":  ["MSFT", "GOOGL", "META", "AMZN"],
-        "MSFT":  ["AAPL", "GOOGL", "META", "AMZN"],
-        "GOOGL": ["AAPL", "MSFT", "META", "AMZN"],
-        "META":  ["AAPL", "MSFT", "GOOGL", "AMZN"],
-        "NVDA":  ["AMD", "INTC", "QCOM", "TSM"],
-        "TSLA":  ["F", "GM", "RIVN", "NIO"],
-        # Vietnam Banking
-        "VCB":   ["BID", "CTG", "TCB", "MBB"],
-        "TCB":   ["VCB", "BID", "CTG", "MBB"],
-        "BID":   ["VCB", "CTG", "TCB", "MBB"],
-        "CTG":   ["VCB", "BID", "TCB", "MBB"],
-        "MBB":   ["VCB", "BID", "CTG", "TCB"],
-        # Vietnam Real Estate
-        "VHM":   ["NVL", "PDR", "DXG", "KDH"],
-        "NVL":   ["VHM", "PDR", "DXG", "KDH"],
-        # Vietnam Consumer
-        "MSN":   ["MWG", "PNJ", "FRT", "DGW"],
-        "MWG":   ["MSN", "PNJ", "FRT", "DGW"],
+        # ========================================================
+        # US MARKET SECTORS
+        # ========================================================
+        # Information Technology
+        "AAPL":  ["MSFT", "MANH", "TER", "IDCC", "KLIC"],
+        "MSFT":  ["AAPL", "MANH", "TER", "IDCC", "KLIC"],
+        
+        # Financials
+        "JPM":   ["V", "SF", "JEF", "DFIN", "VBTX"],
+        "V":     ["JPM", "SF", "JEF", "DFIN", "VBTX"],
+        
+        # Health Care
+        "AMGN":  ["ELV", "HALO", "EHC", "HIMS", "NSTG"],
+        
+        # Consumer Discretionary
+        "AMZN":  ["TSLA", "DECK", "CROX", "BOOT", "SONO"],
+        "TSLA":  ["AMZN", "DECK", "CROX", "BOOT", "SONO"],
+        
+        # Consumer Staples
+        "MDLZ":  ["KMB", "CASY", "CELH", "CALM", "JJSF"],
+        
+        # Industrials
+        "LMT":   ["GE", "DE", "UPS", "BYRN", "MLKN"],
+        "GE":    ["LMT", "DE", "UPS", "BYRN", "MLKN"],
+        
+        # Energy
+        "XOM":   ["CVX", "OVV", "APA", "REPX", "PARR"],
+        "CVX":   ["XOM", "OVV", "APA", "REPX", "PARR"],
+        
+        # Utilities
+        "D":     ["NEE", "VST", "NRG", "AWR", "AVA"],
+        
+        # Real Estate
+        "PLD":   ["EQIX", "REXR", "OHI", "LGIH", "UTL"],
+        
+        # Materials
+        "LIN":   ["SHW", "RS", "STLD", "MLI", "IOSP"],
+        
+        # Communication Services
+        "GOOGL": ["META", "PINS", "TTWO", "CNK", "YELP"],
+        "META":  ["GOOGL", "PINS", "TTWO", "CNK", "YELP"],
+
+        # ========================================================
+        # VIETNAM MARKET SECTORS
+        # ========================================================
+        # 1. Ngân hàng
+        "VCB":   ["BID", "LPB", "MSB", "BVB", "ABB"],
+        "BID":   ["VCB", "LPB", "MSB", "BVB", "ABB"],
+        
+        # 2. Bất động sản
+        "VHM":   ["VIC", "KDH", "NLG", "DRH", "HQC"],
+        "VIC":   ["VHM", "KDH", "NLG", "DRH", "HQC"],
+        
+        # 3. Thực phẩm & Đồ uống
+        "VNM":   ["MSN", "PAN", "VHC", "ANV", "IDI"],
+        "MSN":   ["VNM", "PAN", "VHC", "ANV", "IDI"],
+        
+        # 4. Dịch vụ tài chính (Chứng khoán)
+        "SSI":   ["VND", "VCI", "HCM", "BSI", "FTS"],
+        "VND":   ["SSI", "VCI", "HCM", "BSI", "FTS"],
+        
+        # 5. Tài nguyên cơ bản (Thép)
+        "HPG":   ["GVR", "HSG", "NKG", "TVN", "VGS"],
+        
+        # 6. Dầu khí
+        "GAS":   ["PLX", "PVS", "PVD", "PVC", "PVB"],
+        
+        # 7. Bán lẻ
+        "MWG":   ["PNJ", "FRT", "DGW", "PET", "ASG"],
+        "PNJ":   ["MWG", "FRT", "DGW", "PET", "ASG"],
+        
+        # 11. Công nghệ thông tin
+        "FPT":   ["VGI", "CMG", "FOX", "ELC", "ITD"],
+        "VGI":   ["FPT", "CMG", "FOX", "ELC", "ITD"],
     }
 
     _MACRO_TICKERS = {
@@ -109,6 +164,7 @@ class DataCollector:
         self.end_date     = end_date
         self.market       = market.upper()
         self.news_api_key = os.getenv("NEWS_API_KEY")
+        self.fred_api_key = os.getenv("FRED_API_KEY")
         logger.info("DataCollector initialised | tickers=%s | market=%s | %s to %s",
                     self.tickers, self.market, self.start_date, self.end_date)
 
@@ -253,27 +309,22 @@ class DataCollector:
     # ------------------------------------------------------------------ C. Fundamental Data
 
     def fetch_financial_statements(self):
-        """
-        Schema (fundamental_df): date, ticker,
-          revenue, gross_profit, operating_profit, net_income, eps,
-          total_assets, total_liabilities, equity, total_debt, cash,
-          roe, roa, pe, pb, margin, debt_to_equity,
-          shares_outstanding, bvps, dividend
-        """
         result = {}
         for ticker in self.tickers:
             logger.info("Fetching financial statements for %s ...", ticker)
             t = yf.Ticker(ticker)
             income  = t.quarterly_financials
             balance = t.quarterly_balance_sheet
+            cash_flow = t.quarterly_cashflow  # BỔ SUNG DÒNG NÀY
             info    = t.info
-            df = self._build_fundamental(income, balance, info, ticker)
+            # TRUYỀN THÊM cash_flow VÀO HÀM DƯỚI
+            df = self._build_fundamental(income, balance, cash_flow, info, ticker)
             df = self._validate_df(df, f"{ticker}_fundamental")
             result[ticker] = df
             self._save_csv(df, f"{ticker}_fundamental.csv")
         return result
 
-    def _build_fundamental(self, income, balance, info, ticker):
+    def _build_fundamental(self, income, balance, cash_flow, info, ticker):
         def _row(df, *keys):
             if df is None or df.empty:
                 return pd.Series(dtype=float)
@@ -283,10 +334,13 @@ class DataCollector:
             return pd.Series(dtype=float)
 
         dates = set()
+        
         if income is not None and not income.empty:
             dates.update(income.columns)
         if balance is not None and not balance.empty:
             dates.update(balance.columns)
+        if cash_flow is not None and not cash_flow.empty:
+            dates.update(cash_flow.columns)
         dates = sorted(list(dates), reverse=True)
 
         rows = []
@@ -322,7 +376,7 @@ class DataCollector:
             eps = _v(_row(income, "Basic EPS", "Diluted EPS"))
             if eps is None and net_inc is not None and shares is not None and shares != 0:
                 eps = net_inc / shares # Lợi nhuận ròng / Số cổ phiếu
-
+            cfo = _v(_row(cash_flow, "Operating Cash Flow", "Total Cash From Operating Activities"))
             rows.append({
                 "date":               pd.Timestamp(date).strftime("%Y-%m-%d"),
                 "ticker":             ticker,
@@ -336,6 +390,7 @@ class DataCollector:
                 "equity":             equity,
                 "total_debt":         debt,
                 "cash":               _v(_row(balance, "Cash And Cash Equivalents")),
+                "operating_cash_flow": cfo,
                 "roe":                roe,
                 "roa":                roa,
                 "margin":             margin,
@@ -361,7 +416,7 @@ class DataCollector:
         cols = [
             "date", "ticker",
             "revenue", "gross_profit", "operating_profit", "net_income", "eps",
-            "total_assets", "total_liabilities", "equity", "total_debt", "cash",
+            "total_assets", "total_liabilities", "equity", "total_debt", "cash", "operating_cash_flow",
             "roe", "roa", "pe", "pb", "margin", "debt_to_equity",
             "shares_outstanding", "bvps", "dividend",
         ]
@@ -431,50 +486,102 @@ class DataCollector:
 
     def fetch_macro_indicators(self):
         """
-        Schema (macro_df_wide): date, gold_price, oil_price, usd_vnd, bond_yield, interest_rate, inflation_cpi
+        Schema (macro_df_wide): date, fed_funds_rate, us_10y_yield, us_cpi, dxy, gold_price, oil_price
         """
+        import requests
         data_frames = []
-        
-        for variable, symbol in self._MACRO_TICKERS.items():
-            logger.info("Fetching macro: %s (%s) ...", variable, symbol)
-            try:
-                raw = yf.download(symbol, start=self.start_date, end=self.end_date,
-                                  auto_adjust=True, progress=False)
-                if raw.empty:
-                    logger.warning("No data for macro %s (%s).", variable, symbol)
-                    continue
-                
-                df = self._flatten(raw)
-                df = df[["date", "close"]].rename(columns={"close": variable})
-                
-                df.set_index("date", inplace=True)
-                data_frames.append(df)
-                
-            except Exception as e:
-                logger.error("Failed macro %s: %s", variable, e)
 
+        # =================================================================
+        # 1. LẤY DỮ LIỆU TỪ FRED API BẰNG REQUESTS (Không dùng pandas_datareader nữa)
+        # =================================================================
+        fred_indicators = {
+            "fed_funds_rate": "FEDFUNDS",
+            "us_10y_yield": "DGS10",  
+            "us_cpi": "CPIAUCSL"
+        }
+        
+        for name, series_id in fred_indicators.items():
+            logger.info("Fetching macro from FRED API: %s (%s) ...", name, series_id)
+            try:
+                # Đường dẫn (Endpoint) chuẩn xác của FRED để lấy chuỗi dữ liệu
+                url = "https://api.stlouisfed.org/fred/series/observations"
+                params = {
+                    "series_id": series_id,
+                    "api_key": getattr(self, 'fred_api_key', None),
+                    "file_type": "json",
+                    "observation_start": self.start_date, # Bắt buộc phải có để không tải từ năm 1947
+                    "observation_end": self.end_date
+                }
+                resp = requests.get(url, params=params, timeout=10)
+                resp.raise_for_status()
+                data = resp.json()
+                
+                observations = data.get("observations", [])
+                if observations:
+                    # Lọc bỏ giá trị "." (những ngày FRED không có dữ liệu)
+                    valid_obs = [obs for obs in observations if obs.get("value") != "."]
+                    
+                    df = pd.DataFrame(valid_obs)[["date", "value"]]
+                    df["value"] = df["value"].astype(float)
+                    df = df.rename(columns={"value": name})
+                    df["date"] = pd.to_datetime(df["date"])
+                    df.set_index("date", inplace=True)
+                    data_frames.append(df)
+                else:
+                    logger.warning("No data found for FRED series %s", series_id)
+            except Exception as e:
+                logger.error("Failed FRED macro %s: %s", name, e)
+
+        # =================================================================
+        # 2. LẤY DỮ LIỆU TỪ YAHOO FINANCE (DXY, Vàng, Dầu)
+        # =================================================================
+        yf_indicators = {
+            "dxy": "DX-Y.NYB",       
+            "gold_price": "GC=F",    
+            "oil_price": "CL=F"      
+        }
+
+        for name, symbol in yf_indicators.items():
+            logger.info("Fetching macro from yfinance: %s (%s) ...", name, symbol)
+            try:
+                raw = yf.download(symbol, start=self.start_date, end=self.end_date, auto_adjust=True, progress=False)
+                if not raw.empty:
+                    df = self._flatten(raw)
+                    df = df[["date", "close"]].rename(columns={"close": name})
+                    df["date"] = pd.to_datetime(df["date"]) 
+                    df.set_index("date", inplace=True)
+                    data_frames.append(df)
+            except Exception as e:
+                logger.error("Failed yfinance macro %s: %s", name, e)
+
+        # =================================================================
+        # 3. GỘP BẢNG VÀ LÀM SẠCH DỮ LIỆU
+        # =================================================================
         if not data_frames:
             logger.warning("No macro data fetched.")
             return pd.DataFrame(columns=["date"])
 
+        # Gộp tất cả các bảng
         macro_df = pd.concat(data_frames, axis=1).reset_index()
-
+        macro_df["date"] = pd.to_datetime(macro_df["date"])
         macro_df = macro_df.sort_values("date").reset_index(drop=True)
 
-        # 3.inflation_cpi giữ chỗ (vì yfinance không có CPI)
-        macro_df["inflation_cpi"] = float("nan")
-
+        # Trải phẳng dữ liệu theo ngày (Forward Fill)
         value_cols = [c for c in macro_df.columns if c != "date"]
         macro_df[value_cols] = macro_df[value_cols].ffill()
 
+        # Loại bỏ rác đầu mút
+        macro_df = macro_df.dropna(how='all', subset=value_cols).reset_index(drop=True)
+
+        # Định dạng lại chuỗi ngày tháng cho chuẩn Form
+        macro_df["date"] = macro_df["date"].dt.strftime("%Y-%m-%d")
+
         df = self._validate_df(macro_df, "macro_df_wide")
         self._save_csv(df, "macro_indicators.csv")
-        logger.info("Macro fetched: %d rows (Wide Format converted).", len(df))
+        logger.info("Macro fetched: %d rows (FRED Direct API + YFinance).", len(df))
         
         return df
-
-# ------------------------------------------------------------------ F. Industry Data
-
+    
     def fetch_industry_data(self, peers=None):
         """
         Schema (industry_df): date, industry_roe, industry_margin, industry_pe, industry_pb
