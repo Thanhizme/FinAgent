@@ -31,7 +31,6 @@ load_dotenv()
 
 logger = logging.getLogger(__name__)
 
-
 class AIAgent:
     """
     Orchestrates LLM calls to generate natural language financial analysis.
@@ -78,10 +77,6 @@ class AIAgent:
         self.max_tokens = max_tokens
         self._client = self._init_client()
 
-    # ------------------------------------------------------------------
-    # Client initialisation
-    # ------------------------------------------------------------------
-
     def _init_client(self):
         """
         Instantiate the appropriate SDK client based on self.provider.
@@ -107,24 +102,13 @@ class AIAgent:
             )
 
         if self.provider == "gemini":
-            # TODO: import google.generativeai as genai
-            #       genai.configure(api_key=api_key)
-            #       return genai.GenerativeModel(self.model)
             raise NotImplementedError
 
         if self.provider == "anthropic":
-            # TODO: import anthropic
-            #       return anthropic.Anthropic(api_key=api_key)
             raise NotImplementedError
 
         if self.provider == "openai":
-            # TODO: import openai
-            #       return openai.OpenAI(api_key=api_key)
             raise NotImplementedError
-
-    # ------------------------------------------------------------------
-    # Context builder
-    # ------------------------------------------------------------------
 
     def _build_context(self, data: dict[str, pd.DataFrame]) -> str:
         """
@@ -148,12 +132,7 @@ class AIAgent:
         str
             JSON-formatted string to embed in the prompt.
         """
-        # TODO: iterate data, extract summary stats, return json.dumps(summary, indent=2)
         raise NotImplementedError
-
-    # ------------------------------------------------------------------
-    # Analysis methods
-    # ------------------------------------------------------------------
 
     def generate_trend_summary(self, data: dict[str, pd.DataFrame]) -> str:
         """
@@ -168,7 +147,6 @@ class AIAgent:
         str
             LLM-generated narrative referencing specific prices and dates.
         """
-        # TODO: build prompt with _build_context, call _call_llm, return text
         raise NotImplementedError
 
     def generate_anomaly_report(self, data: dict[str, pd.DataFrame]) -> str:
@@ -184,7 +162,6 @@ class AIAgent:
         str
             LLM-generated report citing flagged outlier dates and magnitudes.
         """
-        # TODO: filter rows where is_outlier == True, embed in prompt
         raise NotImplementedError
 
     def generate_risk_commentary(self, data: dict[str, pd.DataFrame]) -> str:
@@ -200,7 +177,6 @@ class AIAgent:
         str
             LLM-generated risk narrative with specific volatility figures.
         """
-        # TODO: extract volatility_30 statistics, embed in prompt
         raise NotImplementedError
 
     def generate_comparison(
@@ -222,12 +198,7 @@ class AIAgent:
         str
             LLM-generated comparison narrative.
         """
-        # TODO: build side-by-side context for selected tickers, call _call_llm
         raise NotImplementedError
-
-    # ------------------------------------------------------------------
-    # Full report runner
-    # ------------------------------------------------------------------
 
     def run_full_analysis(self, data: dict[str, pd.DataFrame]) -> dict[str, str]:
         """
@@ -242,12 +213,7 @@ class AIAgent:
         dict[str, str]
             Keys: 'trend_summary', 'anomaly_report', 'risk_commentary', 'comparison'.
         """
-        # TODO: call each generate_* method, collect results, log completion
         raise NotImplementedError
-
-    # ------------------------------------------------------------------
-    # Low-level LLM call
-    # ------------------------------------------------------------------
 
     def _call_llm(self, system_prompt: str, user_prompt: str) -> str:
         """
@@ -275,5 +241,4 @@ class AIAgent:
           - anthropic : client.messages.create(...)
           - openai    : client.chat.completions.create(...)
         """
-        # TODO: branch on self.provider and call the appropriate SDK method
         raise NotImplementedError

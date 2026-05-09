@@ -1,27 +1,3 @@
-"""
-main.py
--------
-FinAgent - AI-Powered Financial Data Agent
-Entry point and workflow orchestrator.
-
-Pipeline stages
----------------
-  1. Data Collection  : fetch stock prices, financials, news, macro indicators
-  2. Data Processing  : clean, normalise, and engineer features
-  3. Visualisation    : generate all four required chart types
-  4. AI Analysis      : produce LLM-powered narrative reports
-
-Usage
------
-  python main.py                          run full pipeline with defaults
-  python main.py --tickers AAPL MSFT      specify tickers
-  python main.py --start 2023-01-01       override start date
-  python main.py --provider gemini        select LLM provider (default)
-
-Environment
------------
-  Copy .env.example to .env and fill in your API keys before running.
-"""
 
 import argparse
 import logging
@@ -33,10 +9,6 @@ from dateutil.relativedelta import relativedelta
 
 from modules import DataCollector, DataProcessor, DataVisualizer, AIAgent
 
-# ---------------------------------------------------------------------------
-# Logging configuration
-# ---------------------------------------------------------------------------
-
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s | %(levelname)-8s | %(name)s | %(message)s",
@@ -47,10 +19,6 @@ logging.basicConfig(
     ],
 )
 logger = logging.getLogger(__name__)
-
-# ---------------------------------------------------------------------------
-# Defaults
-# ---------------------------------------------------------------------------
 
 _TODAY         = datetime.today()
 _YESTERDAY     = _TODAY - timedelta(days=1)
@@ -66,9 +34,7 @@ SUGGESTED_TICKERS = [
     "FPT", "VCB", "VHM", "HPG",
 ]
 
-
 def _parse_ticker_input(raw_value: str) -> list[str]:
-    """Parse tickers from a comma/space-separated terminal input string."""
     parts = raw_value.replace(",", " ").split()
     cleaned = []
     for item in parts:
@@ -77,9 +43,7 @@ def _parse_ticker_input(raw_value: str) -> list[str]:
             cleaned.append(ticker)
     return cleaned
 
-
 def prompt_tickers_from_terminal(default_tickers: list[str]) -> list[str]:
-    """Prompt users for ticker selection when --tickers is not provided."""
     if not sys.stdin.isatty():
         logger.info("Non-interactive terminal detected, using default tickers: %s", default_tickers)
         return default_tickers
@@ -118,11 +82,6 @@ def prompt_tickers_from_terminal(default_tickers: list[str]) -> list[str]:
         return default_tickers
 
     return default_tickers
-
-
-# ---------------------------------------------------------------------------
-# CLI argument parser
-# ---------------------------------------------------------------------------
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
@@ -167,13 +126,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     return parser
 
-
-# ---------------------------------------------------------------------------
-# Pipeline stages
-# ---------------------------------------------------------------------------
-
 def run_collection(tickers: list[str], start: str, end: str) -> dict:
-    """Stage 1 - collect raw data from all configured sources."""
     logger.info("Stage 1: Data Collection")
     collector = DataCollector(tickers=tickers, start_date=start, end_date=end)
 
@@ -189,43 +142,27 @@ def run_collection(tickers: list[str], start: str, end: str) -> dict:
     logger.info("Data collection complete - %d ticker(s) collected.", len(tickers))
     return raw_data
 
-
-
 def build_processors(raw_data: dict) -> dict:
-    """
-    Wrapper
-    Returns dict:
-        prices      : { ticker: cleaned_df }
-        benchmark   : cleaned_df
-        peers       : { ticker: cleaned_df }
-        fundamental : { ticker: cleaned_df }
-        macro       : cleaned_df
-        industry    : cleaned_df
-    """
     logger.info("Wrapper: build_processors() - bat dau clean toan bo data")
     processed = {}
 
-    # 1. Price data
     processed["prices"] = {}
     for ticker, df in raw_data.get("prices", {}).items():
         if df is not None and not df.empty:
             logger.info("  Processing price: %s", ticker)
             processed["prices"][ticker] = DataProcessor(df=df, ticker=ticker).run_pipeline()
 
-    # 2. Benchmark
     bm_df = raw_data.get("benchmark")
     if bm_df is not None and not bm_df.empty:
         logger.info("  Processing benchmark")
         processed["benchmark"] = DataProcessor(df=bm_df, ticker="benchmark").run_pipeline()
 
-    # 3. Peer data
     processed["peers"] = {}
     for ticker, df in raw_data.get("peers", {}).items():
         if df is not None and not df.empty:
             logger.info("  Processing peer: %s", ticker)
             processed["peers"][ticker] = DataProcessor(df=df, ticker=ticker).run_pipeline()
 
-    # 4. News - clean, encode sentiment, save
     news_df = raw_data.get("news")
     if news_df is not None and not news_df.empty:
         logger.info("  Processing news/sentiment data")
@@ -243,7 +180,6 @@ def build_processors(raw_data: dict) -> dict:
         )
         DataProcessor(df=processed["news"], ticker="news")._save_csv(filename="news_processed.csv")
 
-    # 5. Fundamental data - clean, normalise, enrich, save
     processed["fundamental"] = {}
     for ticker, df in raw_data.get("fundamental", {}).items():
         if df is not None and not df.empty:
@@ -256,7 +192,6 @@ def build_processors(raw_data: dict) -> dict:
             processed["fundamental"][ticker] = p.df
             p._save_csv(filename=f"{ticker}_fundamental_processed.csv")
 
-    # 6. Macro - clean, normalise, save
     macro_df = raw_data.get("macro")
     if macro_df is not None and not macro_df.empty:
         logger.info("  Processing macro indicators")
@@ -267,7 +202,6 @@ def build_processors(raw_data: dict) -> dict:
         processed["macro"] = p.df
         p._save_csv(filename="macro_processed.csv")
 
-    # 7. Industry - clean, normalise, save
     industry_df = raw_data.get("industry")
     if industry_df is not None and not industry_df.empty:
         logger.info("  Processing industry data")
@@ -281,9 +215,7 @@ def build_processors(raw_data: dict) -> dict:
     logger.info("Wrapper: build_processors() hoan tat.")
     return processed
 
-
 def run_processing(raw_data: dict) -> dict:
-    """Stage 2 - clean, normalise, va engineer features qua wrapper build_processors."""
     logger.info("Stage 2: Data Processing")
 
     processed_data = build_processors(raw_data)
@@ -339,9 +271,7 @@ def run_processing(raw_data: dict) -> dict:
     logger.info("Processing complete.")
     return processed_data
 
-
 def run_visualisation(processed_data: dict, timeframe: str = "daily") -> None:
-    """Stage 3 - auto export charts only for user-requested tickers (prices)."""
     logger.info("Stage 3: Visualisation")
 
     chart_frames = {}
@@ -358,13 +288,8 @@ def run_visualisation(processed_data: dict, timeframe: str = "daily") -> None:
     visualizer.render_all(timeframe=timeframe, chart_type="candlestick", include_rolling=True)
     logger.info("Visualisation complete.")
 
-
 def generate_checklist_report(processed_data: dict) -> None:
-    """Stage 5 - auto pass/fail checklist based on processed data columns and row counts."""
 
-    # ---------------------------------------------------------------
-    # Define expected columns per data category
-    # ---------------------------------------------------------------
     _PRICE_COLS = [
         "open", "high", "low", "close", "volume",
         "rsi_14", "macd_line", "macd_signal", "atr_14",
@@ -390,7 +315,7 @@ def generate_checklist_report(processed_data: dict) -> None:
     _INDUSTRY_COLS = ["industry_roe", "industry_margin", "industry_pe", "industry_pb"]
     _NEWS_COLS     = ["sentiment", "sentiment_score", "event_type"]
 
-    results = []   # list of (section, item, status, note)
+    results = []
 
     def check_df(label: str, df, required_cols: list[str], min_rows: int = 1) -> None:
         if df is None or (hasattr(df, "empty") and df.empty):
@@ -407,9 +332,6 @@ def generate_checklist_report(processed_data: dict) -> None:
             note      = f"{pct}% non-null" if present else "missing column"
             results.append((label, col, status, note))
 
-    # ---------------------------------------------------------------
-    # Run checks
-    # ---------------------------------------------------------------
     prices_dict = processed_data.get("prices", {})
     for ticker, df in prices_dict.items():
         check_df(f"price:{ticker}", df, _PRICE_COLS, min_rows=100)
@@ -422,9 +344,6 @@ def generate_checklist_report(processed_data: dict) -> None:
     check_df("industry", processed_data.get("industry"), _INDUSTRY_COLS, min_rows=1)
     check_df("news",     processed_data.get("news"),     _NEWS_COLS,     min_rows=1)
 
-    # ---------------------------------------------------------------
-    # Print summary table
-    # ---------------------------------------------------------------
     pass_n = sum(1 for _, _, s, _ in results if s == "PASS")
     warn_n = sum(1 for _, _, s, _ in results if s == "WARN")
     fail_n = sum(1 for _, _, s, _ in results if s == "FAIL")
@@ -437,7 +356,7 @@ def generate_checklist_report(processed_data: dict) -> None:
     logger.info("%-28s %-26s %-6s %s", "SECTION", "ITEM", "STATUS", "NOTE")
     logger.info(separator)
     for section, item, status, note in results:
-        if status != "PASS":   # only print non-pass rows to keep log concise
+        if status != "PASS":
             logger.info("%-28s %-26s %-6s %s", section[:28], item[:26], status, note)
     logger.info(separator)
     if fail_n == 0 and warn_n == 0:
@@ -446,20 +365,12 @@ def generate_checklist_report(processed_data: dict) -> None:
         logger.info("Review WARN/FAIL rows above. WARNs = column present but all NaN.")
     logger.info(separator)
 
-
 def run_ai_analysis(processed_data: dict, provider: str) -> dict[str, str]:
-    """Stage 4 - LLM-powered narrative analysis."""
     logger.info("Stage 4: AI Analysis (provider=%s)", provider)
     agent = AIAgent(provider=provider)
-    # TODO: reports = agent.run_full_analysis(processed_data)
-    reports = {}  # placeholder
+    reports = {}
     logger.info("AI analysis complete.")
     return reports
-
-
-# ---------------------------------------------------------------------------
-# Main entry point
-# ---------------------------------------------------------------------------
 
 def main() -> None:
     parser = build_parser()
@@ -493,7 +404,6 @@ def main() -> None:
         sys.exit(1)
 
     logger.info("FinAgent pipeline finished successfully.")
-
 
 if __name__ == "__main__":
     main()

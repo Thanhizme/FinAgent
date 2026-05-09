@@ -1,9 +1,3 @@
-"""
-Simple exchange-style web UI for FinAgent.
-
-Run:
-    streamlit run web_app.py
-"""
 
 from __future__ import annotations
 
@@ -22,7 +16,6 @@ APP_DIR = Path(__file__).resolve().parent
 PROCESSED_DIR = APP_DIR / "data" / "processed" / "processed_data"
 VIS_DIR = APP_DIR / "data" / "processed" / "visualization"
 
-
 def parse_tickers(raw: str) -> list[str]:
     parts = raw.replace(",", " ").split()
     tickers: list[str] = []
@@ -31,7 +24,6 @@ def parse_tickers(raw: str) -> list[str]:
         if t and t not in tickers:
             tickers.append(t)
     return tickers
-
 
 def run_pipeline(tickers: list[str], start: date, end: date, timeframe: str) -> tuple[bool, str]:
     cmd = [
@@ -56,20 +48,17 @@ def run_pipeline(tickers: list[str], start: date, end: date, timeframe: str) -> 
     logs = (proc.stdout or "") + "\n" + (proc.stderr or "")
     return proc.returncode == 0, logs.strip()
 
-
 def load_price_df(ticker: str) -> pd.DataFrame | None:
     path = PROCESSED_DIR / f"{ticker}_processed.csv"
     if not path.exists():
         return None
     return pd.read_csv(path)
 
-
 def load_fundamental_df(ticker: str) -> pd.DataFrame | None:
     path = PROCESSED_DIR / f"{ticker}_fundamental_processed.csv"
     if not path.exists():
         return None
     return pd.read_csv(path)
-
 
 def available_tickers() -> list[str]:
     tickers = []
@@ -85,7 +74,6 @@ def available_tickers() -> list[str]:
                 tickers.append(ticker.upper())
     return sorted(tickers)
 
-
 def chart_files_for_ticker(ticker: str, timeframe: str) -> list[Path]:
     t = ticker.lower()
     if timeframe == "all":
@@ -97,14 +85,11 @@ def chart_files_for_ticker(ticker: str, timeframe: str) -> list[Path]:
         ]
     return [VIS_DIR / f"{t}_price_volume_{timeframe}.html"]
 
-
 def returns_distribution_path(ticker: str) -> Path:
     return VIS_DIR / f"{ticker.lower()}_returns_distribution.html"
 
-
 def correlation_heatmap_path(ticker: str) -> Path:
     return VIS_DIR / f"{ticker.lower()}_correlation_heatmap.html"
-
 
 def ensure_chart_file(ticker: str, timeframe: str, price_df: pd.DataFrame) -> Path | None:
     files = chart_files_for_ticker(ticker, timeframe)
@@ -119,13 +104,11 @@ def ensure_chart_file(ticker: str, timeframe: str, price_df: pd.DataFrame) -> Pa
         visualizer = DataVisualizer({ticker: price_df})
         visualizer.price_trend_chart(ticker=ticker, chart_type="candlestick", timeframe=timeframe, save=True)
         if timeframe == "all":
-            # generate rolling stats once for the selected ticker when all timeframes are requested
             visualizer.rolling_stats_chart(ticker=ticker, save=True)
         return next((p for p in files if p.exists()), None)
     except Exception as exc:
         st.error(f"Unable to generate chart for {ticker}: {exc}")
         return None
-
 
 def ensure_returns_distribution_chart(ticker: str, price_df: pd.DataFrame) -> Path | None:
     path = returns_distribution_path(ticker)
@@ -140,7 +123,6 @@ def ensure_returns_distribution_chart(ticker: str, price_df: pd.DataFrame) -> Pa
         st.error(f"Unable to generate returns distribution for {ticker}: {exc}")
         return None
 
-
 def ensure_correlation_heatmap_chart(ticker: str, price_df: pd.DataFrame) -> Path | None:
     path = correlation_heatmap_path(ticker)
     if price_df is None or price_df.empty:
@@ -154,14 +136,12 @@ def ensure_correlation_heatmap_chart(ticker: str, price_df: pd.DataFrame) -> Pat
         st.error(f"Unable to generate correlation heatmap for {ticker}: {exc}")
         return None
 
-
 def render_chart(path: Path, height: int = 980) -> None:
     if not path.exists():
         st.warning(f"Chart not found: {path.name}")
         return
     html = path.read_text(encoding="utf-8")
     components.html(html, height=height, scrolling=True)
-
 
 def metric_value(df: pd.DataFrame, col: str, fmt: str = "{:.2f}") -> str:
     if col not in df.columns or df.empty:
@@ -173,7 +153,6 @@ def metric_value(df: pd.DataFrame, col: str, fmt: str = "{:.2f}") -> str:
         return fmt.format(float(value.iloc[-1]))
     except Exception:
         return str(value.iloc[-1])
-
 
 st.set_page_config(
     page_title="FinAgent Exchange UI",
@@ -220,6 +199,16 @@ with st.sidebar:
     end_date = st.date_input("End date", value=default_end)
 
     timeframe = st.selectbox("Chart timeframe", ["daily", "weekly", "monthly", "yearly", "all"], index=0)
+
+    st.markdown("---")
+    st.markdown("**Comparison**")
+    _all_tickers = available_tickers()
+    _other_tickers = [t for t in _all_tickers if t != (selected_ticker if "selected_ticker" in locals() else "")]
+    stock_b_sidebar = st.selectbox(
+        "Compare vs (Stock B)",
+        _other_tickers if _other_tickers else ["—"],
+        key="stock_b_selector",
+    )
 
     col_a, col_b = st.columns(2)
     run_clicked = col_a.button("Run", use_container_width=True)
@@ -342,16 +331,15 @@ if dashboard_ticker:
                 "Select **Stock B** below to compare metrics and the Efficient Frontier."
             )
 
+            stock_b = st.session_state.get("stock_b_selector", "")
             other_tickers = [t for t in available_tickers() if t != dashboard_ticker]
-            if not other_tickers:
+            if not other_tickers or not stock_b or stock_b == "—":
                 st.warning("No other tickers available. Run the pipeline for at least one additional ticker.")
             else:
-                stock_b = st.selectbox("Select Stock B", other_tickers, key="stock_b_selector")
                 price_b = load_price_df(stock_b)
                 fund_a = load_fundamental_df(dashboard_ticker)
                 fund_b = load_fundamental_df(stock_b)
 
-                # ---------- Metric comparison table ----------
                 def _last_val(df, col, pct=False, dollar=False):
                     if df is None or df.empty or col not in df.columns:
                         return "N/A"
@@ -422,7 +410,6 @@ if dashboard_ticker:
                     t_df = pd.DataFrame(tech_rows, columns=["Metric", dashboard_ticker, stock_b])
                     st.dataframe(t_df.set_index("Metric"), use_container_width=True)
 
-                # ---------- Bar chart comparison ----------
                 st.markdown("#### Visual Comparison")
                 all_price_data = {}
                 for t in available_tickers():
@@ -446,7 +433,6 @@ if dashboard_ticker:
                 except Exception as exc:
                     st.warning(f"Could not render comparison bar chart: {exc}")
 
-                # ---------- Efficient Frontier ----------
                 st.markdown("#### Efficient Frontier")
                 st.caption("Y-axis: Annualised Return &nbsp;|&nbsp; X-axis: Annualised Volatility (Risk)")
                 try:
@@ -478,3 +464,4 @@ if dashboard_ticker:
         st.dataframe(price_df[summary_cols].tail(10), use_container_width=True)
 else:
     st.info("Choose a ticker from the sidebar and press Run to load the dashboard.")
+

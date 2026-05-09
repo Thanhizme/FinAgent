@@ -29,7 +29,6 @@ logger = logging.getLogger(__name__)
 RAW_DATA_DIR = Path(__file__).resolve().parents[1] / "data" / "raw"
 RAW_DATA_DIR.mkdir(parents=True, exist_ok=True)
 
-
 class DataCollector:
     """
     Collects financial data from multiple sources and saves raw files to disk.
@@ -42,91 +41,63 @@ class DataCollector:
     market     : str  "GLOBAL" | "VN"
     """
 
-    # ------------------------------------------------------------------ constants
-
     _BENCHMARK_TICKER = {
         "GLOBAL": "^GSPC",
         "VN":     "^VNINDEX",
     }
 
     _PEER_MAP = {
-        # ========================================================
-        # US MARKET SECTORS
-        # ========================================================
-        # Information Technology
         "AAPL":  ["MSFT", "MANH", "TER", "IDCC", "KLIC"],
         "MSFT":  ["AAPL", "MANH", "TER", "IDCC", "KLIC"],
         
-        # Financials
         "JPM":   ["V", "SF", "JEF", "DFIN", "VBTX"],
         "V":     ["JPM", "SF", "JEF", "DFIN", "VBTX"],
         
-        # Health Care
         "AMGN":  ["ELV", "HALO", "EHC", "HIMS", "NSTG"],
         
-        # Consumer Discretionary
         "AMZN":  ["TSLA", "DECK", "CROX", "BOOT", "SONO"],
         "TSLA":  ["AMZN", "DECK", "CROX", "BOOT", "SONO"],
         
-        # Consumer Staples
         "MDLZ":  ["KMB", "CASY", "CELH", "CALM", "JJSF"],
         
-        # Industrials
         "LMT":   ["GE", "DE", "UPS", "BYRN", "MLKN"],
         "GE":    ["LMT", "DE", "UPS", "BYRN", "MLKN"],
         
-        # Energy
         "XOM":   ["CVX", "OVV", "APA", "REPX", "PARR"],
         "CVX":   ["XOM", "OVV", "APA", "REPX", "PARR"],
         
-        # Utilities
         "D":     ["NEE", "VST", "NRG", "AWR", "AVA"],
         
-        # Real Estate
         "PLD":   ["EQIX", "REXR", "OHI", "LGIH", "UTL"],
         
-        # Materials
         "LIN":   ["SHW", "RS", "STLD", "MLI", "IOSP"],
         
-        # Communication Services
         "GOOGL": ["META", "PINS", "TTWO", "CNK", "YELP"],
         "META":  ["GOOGL", "PINS", "TTWO", "CNK", "YELP"],
 
-        # ========================================================
-        # VIETNAM MARKET SECTORS
-        # ========================================================
-        # 1. Ngân hàng
         "VCB":   ["BID", "LPB", "MSB", "BVB", "ABB"],
         "BID":   ["VCB", "LPB", "MSB", "BVB", "ABB"],
         
-        # 2. Bất động sản
         "VHM":   ["VIC", "KDH", "NLG", "DRH", "HQC"],
         "VIC":   ["VHM", "KDH", "NLG", "DRH", "HQC"],
         
-        # 3. Thực phẩm & Đồ uống
         "VNM":   ["MSN", "PAN", "VHC", "ANV", "IDI"],
         "MSN":   ["VNM", "PAN", "VHC", "ANV", "IDI"],
         
-        # 4. Dịch vụ tài chính (Chứng khoán)
         "SSI":   ["VND", "VCI", "HCM", "BSI", "FTS"],
         "VND":   ["SSI", "VCI", "HCM", "BSI", "FTS"],
         
-        # 5. Tài nguyên cơ bản (Thép)
         "HPG":   ["GVR", "HSG", "NKG", "TVN", "VGS"],
         
-        # 6. Dầu khí
         "GAS":   ["PLX", "PVS", "PVD", "PVC", "PVB"],
         
-        # 7. Bán lẻ
         "MWG":   ["PNJ", "FRT", "DGW", "PET", "ASG"],
         "PNJ":   ["MWG", "FRT", "DGW", "PET", "ASG"],
         
-        # 11. Công nghệ thông tin
         "FPT":   ["VGI", "CMG", "FOX", "ELC", "ITD"],
         "VGI":   ["FPT", "CMG", "FOX", "ELC", "ITD"],
     }
 
-    # VN tickers: yfinance sector/cap info unreliable → always use _PEER_MAP
     _VN_TICKERS = {
         "VCB", "BID", "LPB", "MSB", "BVB", "ABB",
         "VHM", "VIC", "KDH", "NLG", "DRH", "HQC",
@@ -142,7 +113,6 @@ class DataCollector:
         "gold_price":    "GC=F",
         "oil_price":     "CL=F",
         "usd_vnd":       "USDVND=X",
-        #"vnindex":       "^VNINDEX",
         "bond_yield":    "^TNX",
         "interest_rate": "^IRX",
     }
@@ -192,8 +162,6 @@ class DataCollector:
         ],
     }
 
-    # ------------------------------------------------------------------ init
-
     def __init__(self, tickers, start_date, end_date, market="GLOBAL"):
         self.tickers      = tickers
         self.start_date   = start_date
@@ -221,7 +189,6 @@ class DataCollector:
     def _build_ticker_news_query(self, ticker: str, user_query: str | None = None) -> str:
         terms = self._get_news_search_terms(ticker)
         if len(ticker) <= 2 and len(terms) > 1:
-            # Single-character and other short tickers need company-name anchors.
             return " OR ".join(f'"{term}"' if " " in term else term for term in terms[1:])
 
         query_terms = [f'"{term}"' if " " in term else term for term in terms]
@@ -260,15 +227,11 @@ class DataCollector:
                 self._text_contains_term(text, keyword)
                 for keyword in self._NEWS_FINANCE_CONTEXT_KEYWORDS
             )
-            # Keep alias hits even when finance keywords are sparse;
-            # for raw ticker hits, still require finance context to limit false positives.
             return alias_match or (ticker_match and finance_context)
 
         if strong_terms:
             return alias_match or ticker_match
         return ticker_match
-
-    # ------------------------------------------------------------------ helpers
 
     def _flatten(self, raw):
         """Flatten yfinance MultiIndex columns and reset index to plain date column."""
@@ -317,8 +280,6 @@ class DataCollector:
             df = df.sort_values(date_col).reset_index(drop=True)
         return df
 
-    # ------------------------------------------------------------------ A. Price Data
-
     def fetch_stock_prices(self):
         """
         Schema (price_df): date, ticker, open, high, low, close, adj_close, volume
@@ -348,8 +309,6 @@ class DataCollector:
                     if attempt < 3:
                         time.sleep(3)
         return data_map
-
-    # ------------------------------------------------------------------ B. Benchmark & Peers
 
     def fetch_benchmark(self):
         """
@@ -423,7 +382,6 @@ class DataCollector:
 
         fallback = self._PEER_MAP.get(primary, [t for t in self.tickers if t != primary])
 
-        # VN tickers: yfinance sector/cap data is unreliable → skip dynamic lookup
         if primary in self._VN_TICKERS:
             logger.debug("VN ticker %s: using static _PEER_MAP (dynamic lookup skipped).", primary)
             return fallback
@@ -465,8 +423,6 @@ class DataCollector:
             logger.warning("Dynamic peer resolution failed for %s: %s", primary, e)
             return fallback
 
-    # ------------------------------------------------------------------ C. Fundamental Data
-
     def fetch_financial_statements(self):
         result = {}
         for ticker in self.tickers:
@@ -474,9 +430,8 @@ class DataCollector:
             t = yf.Ticker(ticker)
             income  = t.quarterly_financials
             balance = t.quarterly_balance_sheet
-            cash_flow = t.quarterly_cashflow  # BỔ SUNG DÒNG NÀY
+            cash_flow = t.quarterly_cashflow
             info    = t.info
-            # TRUYỀN THÊM cash_flow VÀO HÀM DƯỚI
             df = self._build_fundamental(income, balance, cash_flow, info, ticker)
             df = self._validate_df(df, f"{ticker}_fundamental")
             result[ticker] = df
@@ -521,10 +476,8 @@ class DataCollector:
             interest_expense = _v(_row(income, "Interest Expense"))
             ebitda = _v(_row(income, "EBITDA"))
             
-
             if rev is None and net_inc is None and assets is None and equity is None:
                 continue
-
 
             shares = _v(_row(balance, "Ordinary Shares Number", "Share Issued"))
             if shares is None:
@@ -539,7 +492,7 @@ class DataCollector:
 
             eps = _v(_row(income, "Basic EPS", "Diluted EPS"))
             if eps is None and net_inc is not None and shares is not None and shares != 0:
-                eps = net_inc / shares # Lợi nhuận ròng / Số cổ phiếu
+                eps = net_inc / shares
             cfo = _v(_row(cash_flow, "Operating Cash Flow", "Total Cash From Operating Activities"))
             capex = _v(_row(cash_flow, "Capital Expenditure", "Capital Expenditures"))
             receivables = _v(_row(balance, "Accounts Receivable", "Receivables"))
@@ -610,8 +563,6 @@ class DataCollector:
             "shares_outstanding", "bvps", "dividend",
         ]
         return df[[c for c in cols if c in df.columns]].sort_values("date").reset_index(drop=True)
-
-    # ------------------------------------------------------------------ D. News & Sentiment
 
     def fetch_news(self, query, page_size=50):
         """
@@ -692,8 +643,6 @@ class DataCollector:
             return pd.DataFrame()
         return pd.DataFrame(rows).sort_values("date").reset_index(drop=True)
 
-    # ------------------------------------------------------------------ E. Macro Indicators
-
     def fetch_macro_indicators(self):
         """
         Schema (macro_df_wide): date, fed_funds_rate, us_10y_yield, us_cpi, dxy, gold_price, oil_price
@@ -701,9 +650,6 @@ class DataCollector:
         import requests
         data_frames = []
 
-        # =================================================================
-        # 1. LẤY DỮ LIỆU TỪ FRED API BẰNG REQUESTS (Không dùng pandas_datareader nữa)
-        # =================================================================
         fred_indicators = {
             "fed_funds_rate": "FEDFUNDS",
             "us_10y_yield": "DGS10",  
@@ -715,13 +661,12 @@ class DataCollector:
         for name, series_id in fred_indicators.items():
             logger.info("Fetching macro from FRED API: %s (%s) ...", name, series_id)
             try:
-                # Đường dẫn (Endpoint) chuẩn xác của FRED để lấy chuỗi dữ liệu
                 url = "https://api.stlouisfed.org/fred/series/observations"
                 params = {
                     "series_id": series_id,
                     "api_key": getattr(self, 'fred_api_key', None),
                     "file_type": "json",
-                    "observation_start": self.start_date, # Bắt buộc phải có để không tải từ năm 1947
+                    "observation_start": self.start_date,
                     "observation_end": self.end_date
                 }
                 resp = requests.get(url, params=params, timeout=10)
@@ -730,7 +675,6 @@ class DataCollector:
                 
                 observations = data.get("observations", [])
                 if observations:
-                    # Lọc bỏ giá trị "." (những ngày FRED không có dữ liệu)
                     valid_obs = [obs for obs in observations if obs.get("value") != "."]
                     
                     df = pd.DataFrame(valid_obs)[["date", "value"]]
@@ -744,9 +688,6 @@ class DataCollector:
             except Exception as e:
                 logger.error("Failed FRED macro %s: %s", name, e)
 
-        # =================================================================
-        # 2. LẤY DỮ LIỆU TỪ YAHOO FINANCE (DXY, Vàng, Dầu)
-        # =================================================================
         yf_indicators = {
             "dxy": "DX-Y.NYB",       
             "gold_price": "GC=F",    
@@ -767,10 +708,6 @@ class DataCollector:
             except Exception as e:
                 logger.error("Failed yfinance macro %s: %s", name, e)
 
-        # =================================================================
-        # 3. FDI INFLOW TỪ WORLD BANK API (annual, forward-fill to daily)
-        # =================================================================
-        # Indicator: BX.KLT.DINV.CD.WD = Net FDI inflows (BoP, current USD)
         try:
             start_year = pd.Timestamp(self.start_date).year
             end_year   = pd.Timestamp(self.end_date).year
@@ -797,26 +734,19 @@ class DataCollector:
         except Exception as e:
             logger.error("Failed World Bank FDI fetch: %s", e)
 
-        # =================================================================
-        # 4. GỘP BẢNG VÀ LÀM SẠCH DỮ LIỆU
-        # =================================================================
         if not data_frames:
             logger.warning("No macro data fetched.")
             return pd.DataFrame(columns=["date"])
 
-        # Gộp tất cả các bảng
         macro_df = pd.concat(data_frames, axis=1).reset_index()
         macro_df["date"] = pd.to_datetime(macro_df["date"])
         macro_df = macro_df.sort_values("date").reset_index(drop=True)
 
-        # Trải phẳng dữ liệu theo ngày (Forward Fill)
         value_cols = [c for c in macro_df.columns if c != "date"]
         macro_df[value_cols] = macro_df[value_cols].ffill()
 
-        # Loại bỏ rác đầu mút
         macro_df = macro_df.dropna(how='all', subset=value_cols).reset_index(drop=True)
 
-        # Định dạng lại chuỗi ngày tháng cho chuẩn Form
         macro_df["date"] = macro_df["date"].dt.strftime("%Y-%m-%d")
 
         expected_cols = [
@@ -827,7 +757,6 @@ class DataCollector:
         for col in expected_cols:
             if col not in macro_df.columns:
                 macro_df[col] = np.nan
-        # Provide market-aware default for domestic policy-rate proxy.
         if "domestic_interest_rate" in macro_df.columns:
             macro_df["domestic_interest_rate"] = macro_df["domestic_interest_rate"].fillna(macro_df.get("fed_funds_rate"))
         macro_df = macro_df[expected_cols]
@@ -859,7 +788,6 @@ class DataCollector:
                 inc = t.quarterly_financials
                 bal = t.quarterly_balance_sheet
 
-                # Fetch price history to get close price at each quarter-end date
                 try:
                     price_hist = t.history(start=self.start_date, end=self.end_date, interval="1d")
                     if isinstance(price_hist.index, pd.DatetimeIndex):
@@ -890,7 +818,6 @@ class DataCollector:
                     roe = (net_inc / eq) if (net_inc and eq and eq != 0) else None
                     margin = (net_inc / rev) if (net_inc and rev and rev != 0) else None
 
-                    # Get close price on or before this quarter-end date
                     price_at_date = None
                     if price_series is not None and not price_series.empty:
                         d_ts = pd.Timestamp(d).tz_localize(None)
@@ -898,14 +825,12 @@ class DataCollector:
                         if not eligible.empty:
                             price_at_date = float(eligible.iloc[-1])
 
-                    # PE = price / (net_income / shares)
                     pe = None
                     if price_at_date and net_inc and shares and shares > 0:
                         eps = net_inc / shares
                         if eps > 0:
                             pe = price_at_date / eps
 
-                    # PB = price / (equity / shares)
                     pb = None
                     if price_at_date and eq and shares and shares > 0:
                         bvps = eq / shares
@@ -944,8 +869,6 @@ class DataCollector:
         
         return df
 
-    # ------------------------------------------------------------------ Intraday (Section 5)
-
     def fetch_intraday(self, interval="5m", period="5d"):
         """
         Schema (intraday_df): timestamp, ticker, price, volume
@@ -976,3 +899,4 @@ class DataCollector:
             except Exception as e:
                 logger.error("Failed intraday %s: %s", ticker, e)
         return data_map
+

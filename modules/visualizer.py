@@ -30,7 +30,6 @@ logger = logging.getLogger(__name__)
 OUTPUT_DIR = Path(__file__).resolve().parents[1] / "data" / "processed" / "visualization"
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
-
 class DataVisualizer:
     """
     Produces publication-quality financial charts from processed DataFrames.
@@ -137,10 +136,6 @@ class DataVisualizer:
             fig.write_image(str(png_path), scale=2)
         except Exception as exc:
             logger.info("PNG export skipped for %s (%s)", filename_stub, exc)
-
-    # ------------------------------------------------------------------
-    # Chart 1 ??" Price Trend + Volume Overlay
-    # ------------------------------------------------------------------
 
     def price_trend_chart(
         self,
@@ -395,10 +390,6 @@ class DataVisualizer:
         self._save_figure(fig, filename_stub, save)
         logger.info("Saved price trend chart -> %s", self.output_dir / f"{filename_stub}.html")
 
-    # ------------------------------------------------------------------
-    # Chart 2 ??" Correlation Heatmap
-    # ------------------------------------------------------------------
-
     def correlation_heatmap(
         self,
         ticker: Optional[str] = None,
@@ -507,10 +498,6 @@ class DataVisualizer:
         self._save_figure(fig, filename_stub, save)
         logger.info("Saved correlation heatmap -> %s", self.output_dir / f"{filename_stub}.html")
 
-    # ------------------------------------------------------------------
-    # Chart 3 ??" Returns Distribution
-    # ------------------------------------------------------------------
-
     def returns_distribution(
         self,
         tickers: Optional[list[str]] = None,
@@ -593,7 +580,6 @@ class DataVisualizer:
                         x_grid = np.linspace(float(clipped.min()), float(clipped.max()), 300)
                         density = kde(x_grid)
 
-                        # Scale KDE to frequency axis so it overlays histogram naturally.
                         scale = len(clipped) * (span / bins if bins > 0 and span > 0 else 1)
                         y_kde = density * scale
                         if np.isfinite(y_kde).any() and float(np.nanmax(y_kde)) > 0:
@@ -649,7 +635,6 @@ class DataVisualizer:
                 ("VaR 99%", "#fb7185", "dot", var99),
             ]
 
-            # Dedicated right-side box for vertical-line explanation.
             fig.add_shape(
                 type="rect",
                 xref="paper",
@@ -748,10 +733,6 @@ class DataVisualizer:
             filename_stub = f"{ticker.lower()}_returns_distribution"
             self._save_figure(fig, filename_stub, save)
             logger.info("Saved returns distribution chart -> %s", self.output_dir / f"{filename_stub}.html")
-
-    # ------------------------------------------------------------------
-    # Chart 4 ??" Rolling Statistics (MA + Bollinger Bands)
-    # ------------------------------------------------------------------
 
     def rolling_stats_chart(
         self,
@@ -951,10 +932,6 @@ class DataVisualizer:
         self._save_figure(fig, filename_stub, save)
         logger.info("Saved rolling stats chart -> %s", self.output_dir / f"{filename_stub}.html")
 
-    # ------------------------------------------------------------------
-    # Convenience ??" render all charts for all tickers
-    # ------------------------------------------------------------------
-
     def render_all(
         self,
         timeframe: str = "daily",
@@ -979,10 +956,6 @@ class DataVisualizer:
                         self.rolling_stats_chart(ticker=ticker, save=True)
             except Exception as exc:
                 logger.exception("Chart rendering failed for %s: %s", ticker, exc)
-
-    # ------------------------------------------------------------------
-    # Chart 5 — Comparison Metrics (Financial Health / Valuation / Technical)
-    # ------------------------------------------------------------------
 
     def comparison_metrics_chart(
         self,
@@ -1022,7 +995,6 @@ class DataVisualizer:
             vals = pd.to_numeric(df[col], errors="coerce").dropna()
             return float(vals.iloc[-1]) if not vals.empty else None
 
-        # ---- Category 1: Company Financial Health ----
         health_metrics = {
             "ROE (%)": (
                 (_latest(fund_a, "roe") or 0) * 100,
@@ -1050,7 +1022,6 @@ class DataVisualizer:
             ),
         }
 
-        # ---- Category 2: Fundamental Valuation ----
         fund_metrics = {
             "P/E Ratio": (
                 _latest(fund_a, "pe") or 0,
@@ -1078,7 +1049,6 @@ class DataVisualizer:
             ),
         }
 
-        # ---- Category 3: Technical Valuation ----
         tech_metrics = {
             "RSI 14": (
                 _tech(ticker_a, "rsi_14") or 0,
@@ -1199,10 +1169,6 @@ class DataVisualizer:
         logger.info("Saved comparison chart -> %s", self.output_dir / f"{stub}.html")
         return fig
 
-    # ------------------------------------------------------------------
-    # Chart 6 — Efficient Frontier (Risk-Return Scatter)
-    # ------------------------------------------------------------------
-
     def efficient_frontier_chart(
         self,
         ticker_a: str,
@@ -1226,7 +1192,6 @@ class DataVisualizer:
         """
         price_dfs = all_price_dfs or self.data
 
-        # Compute annualised return and volatility for each ticker
         points: dict[str, dict] = {}
         for t, df in price_dfs.items():
             if df is None or df.empty:
@@ -1252,7 +1217,6 @@ class DataVisualizer:
 
         fig = go.Figure()
 
-        # Background: all tickers except A and B
         bg_tickers = [t for t in points if t not in (ticker_a, ticker_b)]
         if bg_tickers:
             fig.add_trace(
@@ -1269,9 +1233,7 @@ class DataVisualizer:
                 )
             )
 
-        # Efficient Frontier curve (2-stock: A + B)
         if ticker_a in points and ticker_b in points:
-            # Compute correlation from overlapping returns
             try:
                 df_a = price_dfs[ticker_a].copy()
                 df_b = price_dfs[ticker_b].copy()
@@ -1315,7 +1277,6 @@ class DataVisualizer:
                 )
             )
 
-        # Stock A marker
         if ticker_a in points:
             fig.add_trace(
                 go.Scatter(
@@ -1331,7 +1292,6 @@ class DataVisualizer:
                 )
             )
 
-        # Stock B marker
         if ticker_b in points:
             fig.add_trace(
                 go.Scatter(
