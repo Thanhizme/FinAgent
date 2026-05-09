@@ -22,6 +22,8 @@ import pandas as pd
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 from scipy.stats import gaussian_kde
+from ta.momentum import ROCIndicator, RSIIndicator, StochasticOscillator, WilliamsRIndicator
+from ta.trend import CCIIndicator, MACD
 
 logger = logging.getLogger(__name__)
 
@@ -977,4 +979,416 @@ class DataVisualizer:
                         self.rolling_stats_chart(ticker=ticker, save=True)
             except Exception as exc:
                 logger.exception("Chart rendering failed for %s: %s", ticker, exc)
+
+    # ------------------------------------------------------------------
+    # Chart 5 — Comparison Metrics (Financial Health / Valuation / Technical)
+    # ------------------------------------------------------------------
+
+    def comparison_metrics_chart(
+        self,
+        ticker_a: str,
+        ticker_b: str,
+        fund_a: Optional[pd.DataFrame] = None,
+        fund_b: Optional[pd.DataFrame] = None,
+        save: bool = True,
+    ) -> go.Figure:
+        """
+        Side-by-side grouped bar chart comparing Stock A vs Stock B across three
+        categories: Company Financial Health, Fundamental Valuation, Technical Valuation.
+
+        Parameters
+        ----------
+        ticker_a, ticker_b : str
+            The two tickers to compare.
+        fund_a, fund_b : pd.DataFrame, optional
+            Latest-row fundamental data for each ticker (already loaded by caller).
+        save : bool
+            Whether to save the figure to output_dir.
+        """
+
+        def _latest(df: Optional[pd.DataFrame], col: str) -> Optional[float]:
+            if df is None or df.empty or col not in df.columns:
+                return None
+            vals = pd.to_numeric(df[col], errors="coerce").dropna()
+            return float(vals.iloc[-1]) if not vals.empty else None
+
+        def _tech(ticker: str, col: str) -> Optional[float]:
+            try:
+                df = self._get_ticker_frame(ticker)
+            except KeyError:
+                return None
+            if col not in df.columns:
+                return None
+            vals = pd.to_numeric(df[col], errors="coerce").dropna()
+            return float(vals.iloc[-1]) if not vals.empty else None
+
+        # ---- Category 1: Company Financial Health ----
+        health_metrics = {
+            "ROE (%)": (
+                (_latest(fund_a, "roe") or 0) * 100,
+                (_latest(fund_b, "roe") or 0) * 100,
+            ),
+            "ROA (%)": (
+                (_latest(fund_a, "roa") or 0) * 100,
+                (_latest(fund_b, "roa") or 0) * 100,
+            ),
+            "Debt/Equity": (
+                _latest(fund_a, "debt_to_equity") or 0,
+                _latest(fund_b, "debt_to_equity") or 0,
+            ),
+            "Current Ratio": (
+                _latest(fund_a, "current_ratio") or 0,
+                _latest(fund_b, "current_ratio") or 0,
+            ),
+            "Interest Coverage": (
+                _latest(fund_a, "interest_coverage") or 0,
+                _latest(fund_b, "interest_coverage") or 0,
+            ),
+            "Altman Z": (
+                _latest(fund_a, "altman_z_score") or 0,
+                _latest(fund_b, "altman_z_score") or 0,
+            ),
+        }
+
+        # ---- Category 2: Fundamental Valuation ----
+        fund_metrics = {
+            "P/E Ratio": (
+                _latest(fund_a, "pe") or 0,
+                _latest(fund_b, "pe") or 0,
+            ),
+            "P/B Ratio": (
+                _latest(fund_a, "pb") or 0,
+                _latest(fund_b, "pb") or 0,
+            ),
+            "EPS": (
+                _latest(fund_a, "eps") or 0,
+                _latest(fund_b, "eps") or 0,
+            ),
+            "Net Margin (%)": (
+                (_latest(fund_a, "net_profit_margin") or 0) * 100,
+                (_latest(fund_b, "net_profit_margin") or 0) * 100,
+            ),
+            "Gross Margin (%)": (
+                (_latest(fund_a, "gross_profit_margin") or 0) * 100,
+                (_latest(fund_b, "gross_profit_margin") or 0) * 100,
+            ),
+            "Dividend ($)": (
+                _latest(fund_a, "dividend") or 0,
+                _latest(fund_b, "dividend") or 0,
+            ),
+        }
+
+        # ---- Category 3: Technical Valuation ----
+        tech_metrics = {
+            "RSI 14": (
+                _tech(ticker_a, "rsi_14") or 0,
+                _tech(ticker_b, "rsi_14") or 0,
+            ),
+            "Sharpe Ratio": (
+                _tech(ticker_a, "sharpe_ratio") or 0,
+                _tech(ticker_b, "sharpe_ratio") or 0,
+            ),
+            "Volatility 20d (%)": (
+                (_tech(ticker_a, "volatility_20") or 0) * 100,
+                (_tech(ticker_b, "volatility_20") or 0) * 100,
+            ),
+            "Beta": (
+                _tech(ticker_a, "beta") or 0,
+                _tech(ticker_b, "beta") or 0,
+            ),
+            "Max Drawdown (%)": (
+                (_tech(ticker_a, "max_drawdown") or 0) * 100,
+                (_tech(ticker_b, "max_drawdown") or 0) * 100,
+            ),
+            "Rel. Strength": (
+                _tech(ticker_a, "relative_strength") or 0,
+                _tech(ticker_b, "relative_strength") or 0,
+            ),
+        }
+
+        categories = [
+            ("Company Financial Health", health_metrics),
+            ("Fundamental Valuation", fund_metrics),
+            ("Technical Valuation", tech_metrics),
+        ]
+
+        fig = make_subplots(
+            rows=1,
+            cols=3,
+            subplot_titles=[c[0] for c in categories],
+            horizontal_spacing=0.08,
+        )
+
+        color_a = "#38bdf8"
+        color_b = "#f97316"
+
+        for col_idx, (_, metrics) in enumerate(categories, start=1):
+            labels = list(metrics.keys())
+            vals_a = [metrics[k][0] for k in labels]
+            vals_b = [metrics[k][1] for k in labels]
+
+            show_legend = col_idx == 1
+            fig.add_trace(
+                go.Bar(
+                    name=ticker_a,
+                    x=labels,
+                    y=vals_a,
+                    marker_color=color_a,
+                    text=[f"{v:.2f}" for v in vals_a],
+                    textposition="outside",
+                    textfont=dict(size=10),
+                    showlegend=show_legend,
+                    legendgroup="a",
+                ),
+                row=1,
+                col=col_idx,
+            )
+            fig.add_trace(
+                go.Bar(
+                    name=ticker_b,
+                    x=labels,
+                    y=vals_b,
+                    marker_color=color_b,
+                    text=[f"{v:.2f}" for v in vals_b],
+                    textposition="outside",
+                    textfont=dict(size=10),
+                    showlegend=show_legend,
+                    legendgroup="b",
+                ),
+                row=1,
+                col=col_idx,
+            )
+
+        fig.update_layout(
+            title=dict(
+                text=f"Comparison: {ticker_a} (Stock A) vs {ticker_b} (Stock B)",
+                x=0.02,
+                xanchor="left",
+            ),
+            barmode="group",
+            template="plotly_dark",
+            paper_bgcolor="#0b1220",
+            plot_bgcolor="#0f172a",
+            font=dict(family="Inter, Segoe UI, Arial, sans-serif", color="#e2e8f0", size=12),
+            margin=dict(l=50, r=30, t=90, b=120),
+            height=560,
+            legend=dict(
+                orientation="h",
+                yanchor="bottom",
+                y=1.04,
+                xanchor="right",
+                x=1,
+                bgcolor="rgba(15, 23, 42, 0.65)",
+                bordercolor="rgba(148, 163, 184, 0.2)",
+                borderwidth=1,
+            ),
+        )
+        for i in range(1, 4):
+            fig.update_xaxes(tickangle=-30, row=1, col=i)
+            fig.update_yaxes(
+                showgrid=True,
+                gridcolor="rgba(148, 163, 184, 0.12)",
+                zeroline=True,
+                zerolinecolor="rgba(148, 163, 184, 0.3)",
+                row=1,
+                col=i,
+            )
+
+        stub = f"comparison_{ticker_a.lower()}_vs_{ticker_b.lower()}"
+        self._save_figure(fig, stub, save)
+        logger.info("Saved comparison chart -> %s", self.output_dir / f"{stub}.html")
+        return fig
+
+    # ------------------------------------------------------------------
+    # Chart 6 — Efficient Frontier (Risk-Return Scatter)
+    # ------------------------------------------------------------------
+
+    def efficient_frontier_chart(
+        self,
+        ticker_a: str,
+        ticker_b: str,
+        all_price_dfs: Optional[dict[str, pd.DataFrame]] = None,
+        save: bool = True,
+    ) -> go.Figure:
+        """
+        Plot the 2-stock efficient frontier (Stock A + Stock B) plus individual
+        stock risk-return scatter for all available tickers.
+
+        Parameters
+        ----------
+        ticker_a, ticker_b : str
+            The two tickers to highlight as Stock A / Stock B.
+        all_price_dfs : dict, optional
+            Mapping of ticker -> price DataFrame for ALL tickers to plot as background dots.
+            Defaults to self.data.
+        save : bool
+            Whether to save the figure to output_dir.
+        """
+        price_dfs = all_price_dfs or self.data
+
+        # Compute annualised return and volatility for each ticker
+        points: dict[str, dict] = {}
+        for t, df in price_dfs.items():
+            if df is None or df.empty:
+                continue
+            try:
+                frame = df.copy()
+                frame["date"] = pd.to_datetime(frame["date"], errors="coerce")
+                frame = frame.dropna(subset=["date"]).sort_values("date")
+                if "daily_return" in frame.columns:
+                    rets = pd.to_numeric(frame["daily_return"], errors="coerce").dropna()
+                elif "close" in frame.columns:
+                    rets = frame["close"].pct_change().dropna()
+                else:
+                    continue
+                rets = rets.replace([np.inf, -np.inf], np.nan).dropna()
+                if len(rets) < 10:
+                    continue
+                ann_ret = float(rets.mean() * 252)
+                ann_vol = float(rets.std() * np.sqrt(252))
+                points[t] = {"return": ann_ret, "vol": ann_vol, "n": len(rets)}
+            except Exception:
+                continue
+
+        fig = go.Figure()
+
+        # Background: all tickers except A and B
+        bg_tickers = [t for t in points if t not in (ticker_a, ticker_b)]
+        if bg_tickers:
+            fig.add_trace(
+                go.Scatter(
+                    x=[points[t]["vol"] for t in bg_tickers],
+                    y=[points[t]["return"] for t in bg_tickers],
+                    mode="markers+text",
+                    text=bg_tickers,
+                    textposition="top center",
+                    textfont=dict(size=10, color="#94a3b8"),
+                    marker=dict(size=9, color="#475569", line=dict(color="#94a3b8", width=1)),
+                    name="Other stocks",
+                    hovertemplate="<b>%{text}</b><br>Volatility: %{x:.1%}<br>Return: %{y:.1%}<extra></extra>",
+                )
+            )
+
+        # Efficient Frontier curve (2-stock: A + B)
+        if ticker_a in points and ticker_b in points:
+            # Compute correlation from overlapping returns
+            try:
+                df_a = price_dfs[ticker_a].copy()
+                df_b = price_dfs[ticker_b].copy()
+                df_a["date"] = pd.to_datetime(df_a["date"], errors="coerce")
+                df_b["date"] = pd.to_datetime(df_b["date"], errors="coerce")
+                col_r = "daily_return" if "daily_return" in df_a.columns else "close"
+                ra = df_a.set_index("date")[col_r].dropna()
+                rb = df_b.set_index("date")[col_r].dropna()
+                if col_r == "close":
+                    ra = ra.pct_change().dropna()
+                    rb = rb.pct_change().dropna()
+                common = ra.index.intersection(rb.index)
+                if len(common) >= 10:
+                    rho = float(ra.loc[common].corr(rb.loc[common]))
+                else:
+                    rho = 0.5
+            except Exception:
+                rho = 0.5
+
+            r_a = points[ticker_a]["return"]
+            r_b = points[ticker_b]["return"]
+            v_a = points[ticker_a]["vol"]
+            v_b = points[ticker_b]["vol"]
+
+            weights = np.linspace(0, 1, 200)
+            port_ret = weights * r_a + (1 - weights) * r_b
+            port_vol = np.sqrt(
+                (weights * v_a) ** 2
+                + ((1 - weights) * v_b) ** 2
+                + 2 * weights * (1 - weights) * v_a * v_b * rho
+            )
+
+            fig.add_trace(
+                go.Scatter(
+                    x=port_vol,
+                    y=port_ret,
+                    mode="lines",
+                    line=dict(color="rgba(148, 163, 184, 0.45)", width=2, dash="dot"),
+                    name=f"Frontier ({ticker_a}↔{ticker_b})",
+                    hovertemplate="Volatility: %{x:.1%}<br>Return: %{y:.1%}<extra></extra>",
+                )
+            )
+
+        # Stock A marker
+        if ticker_a in points:
+            fig.add_trace(
+                go.Scatter(
+                    x=[points[ticker_a]["vol"]],
+                    y=[points[ticker_a]["return"]],
+                    mode="markers+text",
+                    text=[f"▲ {ticker_a} (A)"],
+                    textposition="top right",
+                    textfont=dict(size=13, color="#38bdf8"),
+                    marker=dict(size=16, color="#38bdf8", symbol="star", line=dict(color="#0ea5e9", width=1.5)),
+                    name=f"{ticker_a} (Stock A)",
+                    hovertemplate=f"<b>{ticker_a} (A)</b><br>Volatility: %{{x:.1%}}<br>Return: %{{y:.1%}}<extra></extra>",
+                )
+            )
+
+        # Stock B marker
+        if ticker_b in points:
+            fig.add_trace(
+                go.Scatter(
+                    x=[points[ticker_b]["vol"]],
+                    y=[points[ticker_b]["return"]],
+                    mode="markers+text",
+                    text=[f"● {ticker_b} (B)"],
+                    textposition="top right",
+                    textfont=dict(size=13, color="#f97316"),
+                    marker=dict(size=16, color="#f97316", symbol="circle", line=dict(color="#ea580c", width=1.5)),
+                    name=f"{ticker_b} (Stock B)",
+                    hovertemplate=f"<b>{ticker_b} (B)</b><br>Volatility: %{{x:.1%}}<br>Return: %{{y:.1%}}<extra></extra>",
+                )
+            )
+
+        fig.add_hline(y=0, line_dash="dash", line_color="rgba(148, 163, 184, 0.3)", line_width=1)
+
+        fig.update_layout(
+            title=dict(
+                text=f"Efficient Frontier — {ticker_a} (A) vs {ticker_b} (B)",
+                x=0.02,
+                xanchor="left",
+            ),
+            template="plotly_dark",
+            paper_bgcolor="#0b1220",
+            plot_bgcolor="#0f172a",
+            font=dict(family="Inter, Segoe UI, Arial, sans-serif", color="#e2e8f0", size=13),
+            margin=dict(l=70, r=30, t=80, b=70),
+            height=580,
+            xaxis=dict(
+                title="Annualised Volatility (Risk)",
+                tickformat=".0%",
+                showgrid=True,
+                gridcolor="rgba(148, 163, 184, 0.12)",
+                zeroline=False,
+            ),
+            yaxis=dict(
+                title="Annualised Return",
+                tickformat=".0%",
+                showgrid=True,
+                gridcolor="rgba(148, 163, 184, 0.12)",
+                zeroline=False,
+            ),
+            legend=dict(
+                orientation="h",
+                yanchor="bottom",
+                y=1.02,
+                xanchor="right",
+                x=1,
+                bgcolor="rgba(15, 23, 42, 0.65)",
+                bordercolor="rgba(148, 163, 184, 0.2)",
+                borderwidth=1,
+            ),
+        )
+
+        stub = f"frontier_{ticker_a.lower()}_vs_{ticker_b.lower()}"
+        self._save_figure(fig, stub, save)
+        logger.info("Saved efficient frontier -> %s", self.output_dir / f"{stub}.html")
+        return fig
 

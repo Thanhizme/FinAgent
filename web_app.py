@@ -155,12 +155,12 @@ def ensure_correlation_heatmap_chart(ticker: str, price_df: pd.DataFrame) -> Pat
         return None
 
 
-def render_chart(path: Path) -> None:
+def render_chart(path: Path, height: int = 980) -> None:
     if not path.exists():
         st.warning(f"Chart not found: {path.name}")
         return
     html = path.read_text(encoding="utf-8")
-    components.html(html, height=980, scrolling=True)
+    components.html(html, height=height, scrolling=True)
 
 
 def metric_value(df: pd.DataFrame, col: str, fmt: str = "{:.2f}") -> str:
@@ -290,7 +290,7 @@ if dashboard_ticker:
         if st.session_state["last_tickers"] and dashboard_ticker not in st.session_state["last_tickers"]:
             st.info("This ticker exists in processed files. Use Refresh Data to rerun analysis for it.")
 
-        main_tab, osc_tab = st.tabs(["Price & Volume", "Oscillators - Returns Distribution"])
+        main_tab, osc_tab, cmp_tab = st.tabs(["Price & Volume", "Oscillators - Returns Distribution", "Comparison"])
 
         with main_tab:
             chart_path = ensure_chart_file(dashboard_ticker, st.session_state["last_timeframe"], price_df)
@@ -334,6 +334,131 @@ if dashboard_ticker:
                     s4.metric("Kurtosis", f"{returns.kurtosis():.3f}")
                     s5.metric("VaR 95%", f"{q95:.3%}")
                     s6.metric("VaR 99%", f"{q99:.3%}")
+
+        with cmp_tab:
+            st.markdown("### Comparison — Stock A vs Stock B")
+            st.caption(
+                f"**Stock A** = {dashboard_ticker} &nbsp;|&nbsp; "
+                "Select **Stock B** below to compare metrics and the Efficient Frontier."
+            )
+
+            other_tickers = [t for t in available_tickers() if t != dashboard_ticker]
+            if not other_tickers:
+                st.warning("No other tickers available. Run the pipeline for at least one additional ticker.")
+            else:
+                stock_b = st.selectbox("Select Stock B", other_tickers, key="stock_b_selector")
+                price_b = load_price_df(stock_b)
+                fund_a = load_fundamental_df(dashboard_ticker)
+                fund_b = load_fundamental_df(stock_b)
+
+                # ---------- Metric comparison table ----------
+                def _last_val(df, col, pct=False, dollar=False):
+                    if df is None or df.empty or col not in df.columns:
+                        return "N/A"
+                    v = pd.to_numeric(df[col], errors="coerce").dropna()
+                    if v.empty:
+                        return "N/A"
+                    val = float(v.iloc[-1])
+                    if pct:
+                        return f"{val * 100:.2f}%"
+                    if dollar:
+                        return f"${val:,.2f}"
+                    return f"{val:.4f}"
+
+                def _last_tech(df, col, pct=False):
+                    if df is None or df.empty or col not in df.columns:
+                        return "N/A"
+                    v = pd.to_numeric(df[col], errors="coerce").dropna()
+                    if v.empty:
+                        return "N/A"
+                    val = float(v.iloc[-1])
+                    return f"{val * 100:.2f}%" if pct else f"{val:.4f}"
+
+                health_rows = [
+                    ("ROE", _last_val(fund_a, "roe", pct=True), _last_val(fund_b, "roe", pct=True)),
+                    ("ROA", _last_val(fund_a, "roa", pct=True), _last_val(fund_b, "roa", pct=True)),
+                    ("Debt/Equity", _last_val(fund_a, "debt_to_equity"), _last_val(fund_b, "debt_to_equity")),
+                    ("Current Ratio", _last_val(fund_a, "current_ratio"), _last_val(fund_b, "current_ratio")),
+                    ("Interest Coverage", _last_val(fund_a, "interest_coverage"), _last_val(fund_b, "interest_coverage")),
+                    ("Altman Z-Score", _last_val(fund_a, "altman_z_score"), _last_val(fund_b, "altman_z_score")),
+                    ("Net Profit Margin", _last_val(fund_a, "net_profit_margin", pct=True), _last_val(fund_b, "net_profit_margin", pct=True)),
+                    ("Gross Profit Margin", _last_val(fund_a, "gross_profit_margin", pct=True), _last_val(fund_b, "gross_profit_margin", pct=True)),
+                ]
+
+                fund_rows = [
+                    ("P/E Ratio", _last_val(fund_a, "pe"), _last_val(fund_b, "pe")),
+                    ("P/B Ratio", _last_val(fund_a, "pb"), _last_val(fund_b, "pb")),
+                    ("EPS", _last_val(fund_a, "eps", dollar=True), _last_val(fund_b, "eps", dollar=True)),
+                    ("BVPS", _last_val(fund_a, "bvps", dollar=True), _last_val(fund_b, "bvps", dollar=True)),
+                    ("Dividend", _last_val(fund_a, "dividend", dollar=True), _last_val(fund_b, "dividend", dollar=True)),
+                    ("Market Cap", _last_val(fund_a, "market_cap"), _last_val(fund_b, "market_cap")),
+                    ("Net Debt/EBITDA", _last_val(fund_a, "net_debt_to_ebitda"), _last_val(fund_b, "net_debt_to_ebitda")),
+                ]
+
+                tech_rows = [
+                    ("RSI 14", _last_tech(price_df, "rsi_14"), _last_tech(price_b, "rsi_14")),
+                    ("MACD Line", _last_tech(price_df, "macd_line"), _last_tech(price_b, "macd_line")),
+                    ("Sharpe Ratio", _last_tech(price_df, "sharpe_ratio"), _last_tech(price_b, "sharpe_ratio")),
+                    ("Volatility 20d", _last_tech(price_df, "volatility_20", pct=True), _last_tech(price_b, "volatility_20", pct=True)),
+                    ("Beta", _last_tech(price_df, "beta"), _last_tech(price_b, "beta")),
+                    ("Max Drawdown", _last_tech(price_df, "max_drawdown", pct=True), _last_tech(price_b, "max_drawdown", pct=True)),
+                    ("Rel. Strength", _last_tech(price_df, "relative_strength"), _last_tech(price_b, "relative_strength")),
+                    ("ADX 14", _last_tech(price_df, "adx_14"), _last_tech(price_b, "adx_14")),
+                ]
+
+                col_left, col_right = st.columns(2)
+
+                with col_left:
+                    st.markdown("#### Company Financial Health")
+                    h_df = pd.DataFrame(health_rows, columns=["Metric", dashboard_ticker, stock_b])
+                    st.dataframe(h_df.set_index("Metric"), use_container_width=True)
+
+                    st.markdown("#### Fundamental Valuation")
+                    f_df = pd.DataFrame(fund_rows, columns=["Metric", dashboard_ticker, stock_b])
+                    st.dataframe(f_df.set_index("Metric"), use_container_width=True)
+
+                with col_right:
+                    st.markdown("#### Technical Valuation")
+                    t_df = pd.DataFrame(tech_rows, columns=["Metric", dashboard_ticker, stock_b])
+                    st.dataframe(t_df.set_index("Metric"), use_container_width=True)
+
+                # ---------- Bar chart comparison ----------
+                st.markdown("#### Visual Comparison")
+                all_price_data = {}
+                for t in available_tickers():
+                    df_t = load_price_df(t)
+                    if df_t is not None:
+                        all_price_data[t] = df_t
+
+                try:
+                    vis_data = {dashboard_ticker: price_df}
+                    if price_b is not None:
+                        vis_data[stock_b] = price_b
+                    visualizer = DataVisualizer(all_price_data)
+                    cmp_fig = visualizer.comparison_metrics_chart(
+                        ticker_a=dashboard_ticker,
+                        ticker_b=stock_b,
+                        fund_a=fund_a,
+                        fund_b=fund_b,
+                        save=True,
+                    )
+                    st.plotly_chart(cmp_fig, use_container_width=True)
+                except Exception as exc:
+                    st.warning(f"Could not render comparison bar chart: {exc}")
+
+                # ---------- Efficient Frontier ----------
+                st.markdown("#### Efficient Frontier")
+                st.caption("Y-axis: Annualised Return &nbsp;|&nbsp; X-axis: Annualised Volatility (Risk)")
+                try:
+                    ef_visualizer = DataVisualizer(all_price_data)
+                    ef_fig = ef_visualizer.efficient_frontier_chart(
+                        ticker_a=dashboard_ticker,
+                        ticker_b=stock_b,
+                        save=True,
+                    )
+                    st.plotly_chart(ef_fig, use_container_width=True)
+                except Exception as exc:
+                    st.warning(f"Could not render efficient frontier: {exc}")
 
         left, right = st.columns([1.35, 1])
         with left:
