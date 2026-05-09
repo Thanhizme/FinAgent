@@ -32,8 +32,10 @@ Anthropic Claude, or OpenAI GPT.
 ```
 FinAgent/
 ├── data/
-│   ├── raw/               # Raw data fetched from APIs (git-ignored)
-│   └── processed/         # Cleaned, feature-engineered CSVs (git-ignored)
+│   ├── raw/                         # Raw data fetched from APIs
+│   └── processed/
+│       ├── processed_data/          # Cleaned, feature-engineered CSVs
+│       └── visualization/           # Exported HTML/PNG charts
 ├── modules/
 │   ├── __init__.py        # Package exports
 │   ├── collector.py       # Stage 1 - Data acquisition
@@ -43,12 +45,14 @@ FinAgent/
 ├── notebooks/
 │   └── docs/
 │       ├── module1.md     # Data collection specification
-│       └── module2.md     # Processing & feature engineering specification
+│       ├── module2.md     # Processing & feature engineering specification
+│       └── module3.md     # Visualization specification
 ├── .env                   # Local secrets - never commit (git-ignored)
 ├── .env.example           # API key configuration template
 ├── .gitignore
 ├── requirements.txt
 ├── main.py                # Pipeline entry point
+├── web_app.py             # Local Streamlit dashboard
 └── README.md
 ```
 
@@ -154,13 +158,14 @@ python main.py --skip-ai
 
 ### CLI Reference
 
-| Argument     | Default       | Description                                                        |
-| ------------ | ------------- | ------------------------------------------------------------------ |
-| `--tickers`  | _(prompt)_    | One or more stock ticker symbols. Omit to get an interactive menu. |
-| `--start`    | 18 months ago | Historical data start date (YYYY-MM-DD)                            |
-| `--end`      | Yesterday     | Historical data end date (YYYY-MM-DD)                              |
-| `--provider` | `gemini`      | LLM provider: `gemini`, `anthropic`, `openai`                      |
-| `--skip-ai`  | `False`       | Skip the AI analysis stage                                         |
+| Argument      | Default       | Description                                                        |
+| ------------- | ------------- | ------------------------------------------------------------------ |
+| `--tickers`   | _(prompt)_    | One or more stock ticker symbols. Omit to get an interactive menu. |
+| `--start`     | 18 months ago | Historical data start date (YYYY-MM-DD)                            |
+| `--end`       | Yesterday     | Historical data end date (YYYY-MM-DD)                              |
+| `--provider`  | `gemini`      | LLM provider: `gemini`, `anthropic`, `openai`                      |
+| `--skip-ai`   | `False`       | Skip the AI analysis stage                                         |
+| `--timeframe` | `daily`       | Chart timeframe: `daily`, `weekly`, `monthly`, `yearly`, `all`     |
 
 > **Note:** The default start date includes an 18-month warm-up buffer so that
 > long-window indicators (MA200, rolling 252-day Sharpe) have sufficient history
@@ -292,14 +297,19 @@ date per ticker** with columns: `article_count`, `positive_count`,
 
 ### visualizer.py — Visualisation
 
-Generates the four required chart types and saves them to `data/processed/`.
+Generates chart files and saves them to `data/processed/visualization/`.
 
-| Method                          | Description                                           |
-| ------------------------------- | ----------------------------------------------------- |
-| `price_trend_chart(ticker)`     | Closing price with MA overlays and volume bars        |
-| `correlation_heatmap()`         | Pairwise return correlation heatmap across all assets |
-| `returns_distribution(tickers)` | Histogram and KDE of daily returns                    |
-| `rolling_stats_chart(ticker)`   | Moving averages with Bollinger Bands shading          |
+| Method                          | Description                                          |
+| ------------------------------- | ---------------------------------------------------- |
+| `price_trend_chart(ticker)`     | Closing price with MA overlays and volume bars       |
+| `correlation_heatmap()`         | Correlation heatmap across selected indicators       |
+| `returns_distribution(tickers)` | Histogram and KDE of daily returns (robust fallback) |
+| `rolling_stats_chart(ticker)`   | Moving averages with Bollinger Bands shading         |
+
+Notes:
+
+- Returns distribution includes risk marker lines (Return=0, Mean, Median, VaR 95%, VaR 99%) and a dedicated right-side legend panel.
+- KDE rendering includes a fallback smoothed density line when SciPy KDE is not stable for a given sample.
 
 ---
 
@@ -320,7 +330,7 @@ grounded prompts to the configured LLM provider.
 
 ## Processed Data Schema
 
-All processed CSVs are saved to `data/processed/`. The pipeline produces
+All processed CSVs are saved to `data/processed/processed_data/`. The pipeline produces
 the following files for each run:
 
 | File                                 | Description                                   | Key columns                                                                                                                                                                                                                                                                                                                                                         |
@@ -347,12 +357,32 @@ the following files for each run:
 
 ## Visualisations
 
-| No. | Chart                         | Library        | Description                                        |
-| --- | ----------------------------- | -------------- | -------------------------------------------------- |
-| 1   | Price Trend + Volume          | Plotly         | Closing price with MA overlays and volume bars     |
-| 2   | Correlation Heatmap           | Seaborn        | Pairwise return correlations across all assets     |
-| 3   | Returns Distribution          | Plotly/Seaborn | Histogram and KDE of daily returns, normal overlay |
-| 4   | Rolling Stats/Bollinger Bands | Plotly         | SMA with upper and lower band shading              |
+| No. | Chart                         | Library | Description                                       |
+| --- | ----------------------------- | ------- | ------------------------------------------------- |
+| 1   | Price Trend + Volume          | Plotly  | Closing price with MA overlays and volume bars    |
+| 2   | Correlation Heatmap           | Plotly  | Correlation matrix across selected indicators     |
+| 3   | Returns Distribution          | Plotly  | Histogram + KDE of daily returns with VaR markers |
+| 4   | Rolling Stats/Bollinger Bands | Plotly  | SMA with upper and lower band shading             |
+
+Generated files are exported to `data/processed/visualization/` as both HTML and PNG (PNG export is best-effort depending on local image backend availability).
+
+---
+
+## Local Dashboard
+
+Run the local dashboard with:
+
+```bash
+python -m streamlit run web_app.py
+```
+
+Dashboard highlights:
+
+- Ticker selection (dropdown from processed files or manual input)
+- Run/Refresh pipeline directly from sidebar
+- Price & Volume tab with timeframe-aware charts
+- Oscillators tab with Returns Distribution and Correlation Heatmap
+- VaR 95% and VaR 99% quick risk metrics
 
 ---
 

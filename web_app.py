@@ -98,6 +98,14 @@ def chart_files_for_ticker(ticker: str, timeframe: str) -> list[Path]:
     return [VIS_DIR / f"{t}_price_volume_{timeframe}.html"]
 
 
+def returns_distribution_path(ticker: str) -> Path:
+    return VIS_DIR / f"{ticker.lower()}_returns_distribution.html"
+
+
+def correlation_heatmap_path(ticker: str) -> Path:
+    return VIS_DIR / f"{ticker.lower()}_correlation_heatmap.html"
+
+
 def ensure_chart_file(ticker: str, timeframe: str, price_df: pd.DataFrame) -> Path | None:
     files = chart_files_for_ticker(ticker, timeframe)
     existing = next((p for p in files if p.exists()), None)
@@ -116,6 +124,34 @@ def ensure_chart_file(ticker: str, timeframe: str, price_df: pd.DataFrame) -> Pa
         return next((p for p in files if p.exists()), None)
     except Exception as exc:
         st.error(f"Unable to generate chart for {ticker}: {exc}")
+        return None
+
+
+def ensure_returns_distribution_chart(ticker: str, price_df: pd.DataFrame) -> Path | None:
+    path = returns_distribution_path(ticker)
+    if price_df is None or price_df.empty:
+        return path if path.exists() else None
+
+    try:
+        visualizer = DataVisualizer({ticker: price_df})
+        visualizer.returns_distribution(tickers=[ticker], plot_type="both", save=True)
+        return path if path.exists() else None
+    except Exception as exc:
+        st.error(f"Unable to generate returns distribution for {ticker}: {exc}")
+        return None
+
+
+def ensure_correlation_heatmap_chart(ticker: str, price_df: pd.DataFrame) -> Path | None:
+    path = correlation_heatmap_path(ticker)
+    if price_df is None or price_df.empty:
+        return path if path.exists() else None
+
+    try:
+        visualizer = DataVisualizer({ticker: price_df})
+        visualizer.correlation_heatmap(ticker=ticker, save=True)
+        return path if path.exists() else None
+    except Exception as exc:
+        st.error(f"Unable to generate correlation heatmap for {ticker}: {exc}")
         return None
 
 
@@ -254,21 +290,50 @@ if dashboard_ticker:
         if st.session_state["last_tickers"] and dashboard_ticker not in st.session_state["last_tickers"]:
             st.info("This ticker exists in processed files. Use Refresh Data to rerun analysis for it.")
 
-        chart_path = ensure_chart_file(dashboard_ticker, st.session_state["last_timeframe"], price_df)
-        if chart_path is not None:
-            if st.session_state["last_timeframe"] == "all":
-                tabs = []
-                chart_paths = [p for p in chart_files_for_ticker(dashboard_ticker, "all") if p.exists()]
-                if chart_paths:
-                    labels = [p.stem.split("_")[-1].upper() for p in chart_paths]
-                    tabs = st.tabs(labels)
-                    for tab, path in zip(tabs, chart_paths):
-                        with tab:
-                            render_chart(path)
+        main_tab, osc_tab = st.tabs(["Price & Volume", "Oscillators - Returns Distribution"])
+
+        with main_tab:
+            chart_path = ensure_chart_file(dashboard_ticker, st.session_state["last_timeframe"], price_df)
+            if chart_path is not None:
+                if st.session_state["last_timeframe"] == "all":
+                    nested_tabs = []
+                    chart_paths = [p for p in chart_files_for_ticker(dashboard_ticker, "all") if p.exists()]
+                    if chart_paths:
+                        labels = [p.stem.split("_")[-1].upper() for p in chart_paths]
+                        nested_tabs = st.tabs(labels)
+                        for tab, path in zip(nested_tabs, chart_paths):
+                            with tab:
+                                render_chart(path)
+                else:
+                    render_chart(chart_path)
             else:
-                render_chart(chart_path)
-        else:
-            st.warning(f"Chart not available for {dashboard_ticker}.")
+                st.warning(f"Chart not available for {dashboard_ticker}.")
+
+        with osc_tab:
+            dist_path = ensure_returns_distribution_chart(dashboard_ticker, price_df)
+            if dist_path is not None:
+                render_chart(dist_path)
+            else:
+                st.warning(f"Returns distribution chart not available for {dashboard_ticker}.")
+
+            heatmap_path = ensure_correlation_heatmap_chart(dashboard_ticker, price_df)
+            if heatmap_path is not None:
+                render_chart(heatmap_path)
+            else:
+                st.warning(f"Correlation heatmap not available for {dashboard_ticker}.")
+
+            if "daily_return" in price_df.columns:
+                returns = price_df["daily_return"].dropna()
+                if not returns.empty:
+                    q95 = returns.quantile(0.05)
+                    q99 = returns.quantile(0.01)
+                    s1, s2, s3, s4, s5, s6 = st.columns(6)
+                    s1.metric("Mean Return", f"{returns.mean():.3%}")
+                    s2.metric("Std Dev", f"{returns.std():.3%}")
+                    s3.metric("Skewness", f"{returns.skew():.3f}")
+                    s4.metric("Kurtosis", f"{returns.kurtosis():.3f}")
+                    s5.metric("VaR 95%", f"{q95:.3%}")
+                    s6.metric("VaR 99%", f"{q99:.3%}")
 
         left, right = st.columns([1.35, 1])
         with left:

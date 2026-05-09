@@ -17,9 +17,11 @@ import logging
 from pathlib import Path
 from typing import Optional
 
+import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
+from scipy.stats import gaussian_kde
 
 logger = logging.getLogger(__name__)
 
@@ -266,7 +268,10 @@ class DataVisualizer:
             if len(df) > 1:
                 step = df["date"].diff().dropna().median()
                 if pd.notna(step):
-                    bar_width = max(step.total_seconds() * 1000 * 0.72, 12 * 60 * 60 * 1000)
+                    step_delta = pd.to_timedelta(step, errors="coerce")
+                    if pd.notna(step_delta):
+                        step_ms = float(step_delta / pd.Timedelta(milliseconds=1))
+                        bar_width = max(step_ms * 0.72, 12 * 60 * 60 * 1000)
 
             fig.add_trace(
                 go.Bar(
@@ -394,30 +399,111 @@ class DataVisualizer:
 
     def correlation_heatmap(
         self,
+        ticker: Optional[str] = None,
         columns: Optional[list[str]] = None,
         save: bool = True,
     ) -> None:
         """
-        Plot a correlation matrix heatmap across all tracked assets.
+        Plot a correlation matrix heatmap across selected indicators.
 
         Parameters
         ----------
+        ticker : str, optional
+            Ticker to visualise. Defaults to the first ticker in self.data.
         columns : list[str], optional
-            Specific columns (e.g. ['Close', 'daily_return']) to include.
-            Defaults to closing prices of all tickers.
+            Specific indicator columns to include.
+            Defaults to a curated set of technical and return indicators.
         save : bool
             Whether to export the figure to output_dir.
 
         Notes
         -----
-        Uses seaborn.heatmap with annotated correlation coefficients.
-        Combines daily_return columns from all tickers into a single DataFrame
-        before computing df.corr().
+        Uses Plotly heatmap with correlation values annotated in each cell.
         """
-        # TODO: pivot combined_df = {ticker: df['daily_return']} ??' pd.DataFrame
-        #       compute corr_matrix = combined_df.corr()
-        #       render seaborn heatmap with annot=True, fmt='.2f'
-        raise NotImplementedError
+        if not self.data:
+            raise ValueError("No data available for correlation heatmap")
+
+        selected_ticker = ticker or next(iter(self.data.keys()))
+        df = self._get_ticker_frame(selected_ticker)
+
+        default_columns = [
+            "daily_return",
+            "log_return",
+            "rsi_14",
+            "macd_line",
+            "macd_signal",
+            "stoch_k",
+            "stoch_d",
+            "adx_14",
+            "williams_r_14",
+            "cci_14",
+            "ultimate_oscillator",
+            "roc_12",
+            "atr_14",
+            "beta",
+            "sharpe_ratio",
+            "relative_strength",
+            "volume",
+        ]
+
+        selected_columns = columns or default_columns
+        available_columns = [c for c in selected_columns if c in df.columns]
+        if len(available_columns) < 2:
+            raise ValueError(
+                f"Ticker '{selected_ticker}' does not have enough indicator columns for correlation heatmap"
+            )
+
+        numeric = df[available_columns].apply(pd.to_numeric, errors="coerce")
+        valid_columns = [c for c in numeric.columns if numeric[c].notna().sum() >= 8]
+        if len(valid_columns) < 2:
+            raise ValueError(
+                f"Ticker '{selected_ticker}' has insufficient non-null indicator data for heatmap"
+            )
+
+        corr = numeric[valid_columns].corr(method="pearson", min_periods=8).round(2)
+
+        fig = go.Figure(
+            data=[
+                go.Heatmap(
+                    z=corr.values,
+                    x=corr.columns,
+                    y=corr.index,
+                    zmin=-1,
+                    zmax=1,
+                    colorscale=[
+                        [0.0, "#1e3a8a"],
+                        [0.5, "#0f172a"],
+                        [1.0, "#b91c1c"],
+                    ],
+                    colorbar=dict(
+                        title="Corr",
+                        ticks="outside",
+                        tickvals=[-1, -0.5, 0, 0.5, 1],
+                        ticktext=["-1.0", "-0.5", "0", "0.5", "1.0"],
+                    ),
+                    text=corr.values,
+                    texttemplate="%{text:.2f}",
+                    textfont=dict(size=10, color="#e2e8f0"),
+                    hovertemplate="%{y} vs %{x}<br>Correlation: %{z:.2f}<extra></extra>",
+                )
+            ]
+        )
+
+        fig.update_layout(
+            title=dict(text=f"{selected_ticker} Correlation Heatmap (Selected Indicators)", x=0.02, xanchor="left"),
+            template="plotly_dark",
+            paper_bgcolor="#0b1220",
+            plot_bgcolor="#0f172a",
+            font=dict(family="Inter, Segoe UI, Arial, sans-serif", color="#e2e8f0", size=12),
+            margin=dict(l=120, r=70, t=70, b=120),
+            height=760,
+        )
+        fig.update_xaxes(tickangle=-35, side="bottom")
+        fig.update_yaxes(autorange="reversed")
+
+        filename_stub = f"{selected_ticker.lower()}_correlation_heatmap"
+        self._save_figure(fig, filename_stub, save)
+        logger.info("Saved correlation heatmap -> %s", self.output_dir / f"{filename_stub}.html")
 
     # ------------------------------------------------------------------
     # Chart 3 ??" Returns Distribution
@@ -426,7 +512,7 @@ class DataVisualizer:
     def returns_distribution(
         self,
         tickers: Optional[list[str]] = None,
-        plot_type: str = "histogram",
+        plot_type: str = "both",
         save: bool = True,
     ) -> None:
         """
@@ -446,9 +532,220 @@ class DataVisualizer:
         Overlay a normal distribution curve for reference.
         Annotate with mean and standard deviation statistics.
         """
-        # TODO: for each ticker plot daily_return distribution
-        #       use plotly.express.histogram or seaborn.histplot(kde=True)
-        raise NotImplementedError
+        selected = tickers or list(self.data.keys())
+        selected = [t for t in selected if t in self.data]
+        if not selected:
+            raise ValueError("No valid tickers supplied for returns_distribution")
+
+        plot_type = (plot_type or "both").lower()
+        if plot_type not in {"histogram", "kde", "both"}:
+            raise ValueError("plot_type must be one of: histogram, kde, both")
+
+        for ticker in selected:
+            df = self._get_ticker_frame(ticker)
+            if "daily_return" not in df.columns:
+                if "close" not in df.columns:
+                    raise ValueError(f"Ticker '{ticker}' data requires daily_return or close column")
+                returns = df["close"].pct_change().dropna()
+            else:
+                returns = df["daily_return"].dropna()
+
+            returns = returns.replace([np.inf, -np.inf], np.nan).dropna()
+            if returns.empty:
+                raise ValueError(f"Ticker '{ticker}' has no valid return values")
+
+            q01 = returns.quantile(0.01)
+            q99 = returns.quantile(0.99)
+            clipped = returns.clip(lower=q01, upper=q99)
+
+            iqr = float(clipped.quantile(0.75) - clipped.quantile(0.25))
+            n = len(clipped)
+            span = float(clipped.max() - clipped.min())
+            if iqr > 0 and n > 1:
+                bin_width = max(2 * iqr / (n ** (1 / 3)), 1e-6)
+            else:
+                bin_width = max(span / 40 if span > 0 else 1e-4, 1e-6)
+            bins = int(np.clip(np.ceil(span / bin_width) if span > 0 else 30, 25, 90))
+
+            fig = go.Figure()
+
+            if plot_type in {"histogram", "both"}:
+                fig.add_trace(
+                    go.Histogram(
+                        x=clipped,
+                        nbinsx=bins,
+                        name="Histogram",
+                        showlegend=True,
+                        marker=dict(color="rgba(96, 165, 250, 0.55)", line=dict(width=0)),
+                        hovertemplate="Return: %{x:.3%}<br>Frequency: %{y}<extra></extra>",
+                    )
+                )
+
+            if plot_type in {"kde", "both"}:
+                kde_added = False
+                x_values = clipped.to_numpy(dtype=float)
+
+                if len(x_values) > 5 and np.nanstd(x_values) > 1e-12:
+                    try:
+                        kde = gaussian_kde(x_values)
+                        x_grid = np.linspace(float(clipped.min()), float(clipped.max()), 300)
+                        density = kde(x_grid)
+
+                        # Scale KDE to frequency axis so it overlays histogram naturally.
+                        scale = len(clipped) * (span / bins if bins > 0 and span > 0 else 1)
+                        y_kde = density * scale
+                        if np.isfinite(y_kde).any() and float(np.nanmax(y_kde)) > 0:
+                            fig.add_trace(
+                                go.Scatter(
+                                    x=x_grid,
+                                    y=y_kde,
+                                    mode="lines",
+                                    line=dict(color="#22d3ee", width=2.6),
+                                    name="KDE",
+                                    showlegend=True,
+                                    hovertemplate="Return: %{x:.3%}<br>Density (scaled): %{y:.2f}<extra></extra>",
+                                )
+                            )
+                            kde_added = True
+                    except Exception:
+                        kde_added = False
+
+                if not kde_added and len(x_values) > 1:
+                    counts, edges = np.histogram(x_values, bins=bins)
+                    centers = (edges[:-1] + edges[1:]) / 2
+                    kernel = np.array([1, 2, 3, 2, 1], dtype=float)
+                    kernel = kernel / kernel.sum()
+                    smooth_counts = np.convolve(counts.astype(float), kernel, mode="same")
+                    fig.add_trace(
+                        go.Scatter(
+                            x=centers,
+                            y=smooth_counts,
+                            mode="lines",
+                            line=dict(color="#22d3ee", width=2.6),
+                            name="KDE",
+                            showlegend=True,
+                            hovertemplate="Return: %{x:.3%}<br>Density (smoothed): %{y:.2f}<extra></extra>",
+                        )
+                    )
+
+            mean_v = float(clipped.mean())
+            median_v = float(clipped.median())
+            var95 = float(clipped.quantile(0.05))
+            var99 = float(clipped.quantile(0.01))
+
+            fig.add_vline(x=0.0, line_width=1.4, line_dash="dot", line_color="#cbd5e1")
+            fig.add_vline(x=mean_v, line_width=1.7, line_dash="dash", line_color="#f59e0b")
+            fig.add_vline(x=median_v, line_width=1.7, line_dash="dash", line_color="#a855f7")
+            fig.add_vline(x=var95, line_width=1.9, line_dash="dash", line_color="#ef4444")
+            fig.add_vline(x=var99, line_width=2.0, line_dash="dot", line_color="#fb7185")
+
+            marker_lines = [
+                ("Return = 0", "#cbd5e1", "dot", 0.0),
+                ("Mean", "#f59e0b", "dash", mean_v),
+                ("Median", "#a855f7", "dash", median_v),
+                ("VaR 95%", "#ef4444", "dash", var95),
+                ("VaR 99%", "#fb7185", "dot", var99),
+            ]
+
+            # Dedicated right-side box for vertical-line explanation.
+            fig.add_shape(
+                type="rect",
+                xref="paper",
+                yref="paper",
+                x0=0.78,
+                x1=0.995,
+                y0=0.16,
+                y1=0.90,
+                line=dict(color="rgba(148, 163, 184, 0.35)", width=1),
+                fillcolor="rgba(15, 23, 42, 0.82)",
+                layer="above",
+            )
+
+            fig.add_annotation(
+                xref="paper",
+                yref="paper",
+                x=0.79,
+                y=0.88,
+                xanchor="left",
+                yanchor="top",
+                showarrow=False,
+                align="left",
+                font=dict(size=11, color="#e2e8f0"),
+                text="<b>Vertical Markers</b>",
+            )
+
+            y_top = 0.82
+            y_step = 0.12
+            for idx, (label, color, dash_style, value) in enumerate(marker_lines):
+                y_pos = y_top - idx * y_step
+                fig.add_shape(
+                    type="line",
+                    xref="paper",
+                    yref="paper",
+                    x0=0.80,
+                    x1=0.86,
+                    y0=y_pos,
+                    y1=y_pos,
+                    line=dict(color=color, width=2, dash=dash_style),
+                    layer="above",
+                )
+                fig.add_annotation(
+                    xref="paper",
+                    yref="paper",
+                    x=0.87,
+                    y=y_pos,
+                    xanchor="left",
+                    yanchor="middle",
+                    showarrow=False,
+                    align="left",
+                    font=dict(size=11, color="#e2e8f0"),
+                    text=f"{label}: {value:.2%}",
+                )
+
+            fig.update_layout(
+                title=dict(
+                    text=f"{ticker} Daily Returns Distribution",
+                    x=0.01,
+                    xanchor="left",
+                    y=0.99,
+                    yanchor="top",
+                ),
+                template="plotly_dark",
+                paper_bgcolor="#0b1220",
+                plot_bgcolor="#0f172a",
+                font=dict(family="Inter, Segoe UI, Arial, sans-serif", color="#e2e8f0", size=13),
+                margin=dict(l=60, r=230, t=105, b=55),
+                height=600,
+                hovermode="x",
+                bargap=0.03,
+                legend=dict(
+                    orientation="h",
+                    yanchor="top",
+                    y=0.955,
+                    xanchor="left",
+                    x=0.0,
+                    bgcolor="rgba(15, 23, 42, 0.65)",
+                    bordercolor="rgba(148, 163, 184, 0.2)",
+                    borderwidth=1,
+                    font=dict(size=11),
+                ),
+                xaxis=dict(
+                    title="Daily Return",
+                    domain=[0.0, 0.74],
+                    tickformat=".1%",
+                    showgrid=True,
+                    gridcolor="rgba(148, 163, 184, 0.10)",
+                ),
+                yaxis=dict(
+                    title="Frequency",
+                    showgrid=True,
+                    gridcolor="rgba(148, 163, 184, 0.10)",
+                ),
+            )
+
+            filename_stub = f"{ticker.lower()}_returns_distribution"
+            self._save_figure(fig, filename_stub, save)
+            logger.info("Saved returns distribution chart -> %s", self.output_dir / f"{filename_stub}.html")
 
     # ------------------------------------------------------------------
     # Chart 4 ??" Rolling Statistics (MA + Bollinger Bands)
