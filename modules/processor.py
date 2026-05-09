@@ -11,7 +11,7 @@ Responsibilities:
   - Outlier detection       : IQR / Z-score flagging (stock splits, data errors)
   - Feature engineering     : daily returns, rolling averages (7d, 30d), volatility
 
-Processed artefacts are persisted to data/processed/.
+Processed artefacts are persisted to data/processed/processed_data/.
 """
 
 import logging
@@ -20,13 +20,13 @@ from pathlib import Path
 import pandas as pd
 import numpy as np
 
-from ta.momentum import RSIIndicator
-from ta.trend import MACD
+from ta.momentum import RSIIndicator, StochasticOscillator, StochRSIIndicator, ROCIndicator, WilliamsRIndicator
+from ta.trend import MACD, ADXIndicator, CCIIndicator
 from ta.volatility import AverageTrueRange
 
 logger = logging.getLogger(__name__)
 
-PROCESSED_DATA_DIR = Path(__file__).resolve().parents[1] / "data" / "processed"
+PROCESSED_DATA_DIR = Path(__file__).resolve().parents[1] / "data" / "processed" / "processed_data"
 PROCESSED_DATA_DIR.mkdir(parents=True, exist_ok=True)
 
 ROLLING_BETA_WINDOW = 60
@@ -327,6 +327,82 @@ class DataProcessor:
         logger.info(f"[{self.ticker}] Momentum Oscillators done | RSI, MACD added")
         return self
 
+    def calc_extended_oscillators(self) -> "DataProcessor":
+        """Calculate extended oscillators requested by valuation checklist."""
+        if 'close' not in self.df.columns:
+            for col in [
+                'stoch_k', 'stoch_d', 'stochrsi_14', 'adx_14', 'williams_r_14',
+                'cci_14', 'ultimate_oscillator', 'roc_12', 'bull_power_13',
+                'bear_power_13', 'highs_lows_14',
+            ]:
+                self.df[col] = np.nan
+            return self
+
+        high = self.df['high'] if 'high' in self.df.columns else self.df['close']
+        low = self.df['low'] if 'low' in self.df.columns else self.df['close']
+        close = self.df['close']
+
+        stoch = StochasticOscillator(high=high, low=low, close=close, window=14, smooth_window=3)
+        self.df['stoch_k'] = stoch.stoch()
+        self.df['stoch_d'] = stoch.stoch_signal()
+
+        stochrsi = StochRSIIndicator(close=close, window=14, smooth1=3, smooth2=3)
+        self.df['stochrsi_14'] = stochrsi.stochrsi_k()
+
+        adx = ADXIndicator(high=high, low=low, close=close, window=14)
+        self.df['adx_14'] = adx.adx()
+
+        williams = WilliamsRIndicator(high=high, low=low, close=close, lbp=14)
+        self.df['williams_r_14'] = williams.williams_r()
+
+        cci = CCIIndicator(high=high, low=low, close=close, window=14, constant=0.015)
+        self.df['cci_14'] = cci.cci()
+
+        # Ultimate oscillator implementation with standard weights (7,14,28)
+        prev_close = close.shift(1)
+        min_low_prev = pd.concat([low, prev_close], axis=1).min(axis=1)
+        max_high_prev = pd.concat([high, prev_close], axis=1).max(axis=1)
+        bp = close - min_low_prev
+        tr = max_high_prev - min_low_prev
+        avg7 = bp.rolling(7).sum() / tr.rolling(7).sum().replace(0, np.nan)
+        avg14 = bp.rolling(14).sum() / tr.rolling(14).sum().replace(0, np.nan)
+        avg28 = bp.rolling(28).sum() / tr.rolling(28).sum().replace(0, np.nan)
+        self.df['ultimate_oscillator'] = 100 * (4 * avg7 + 2 * avg14 + avg28) / 7
+
+        roc = ROCIndicator(close=close, window=12)
+        self.df['roc_12'] = roc.roc()
+
+        ema13 = close.ewm(span=13, adjust=False).mean()
+        self.df['bull_power_13'] = high - ema13
+        self.df['bear_power_13'] = low - ema13
+
+        self.df['highs_lows_14'] = close - high.rolling(14).max()
+
+        logger.info(f"[{self.ticker}] Extended oscillators done | STOCH/STOCHRSI/ADX/Williams/CCI/UO/ROC/BullBear")
+        return self
+
+    def calc_pivot_points(self) -> "DataProcessor":
+        """Calculate classic daily pivot points using previous period high/low/close."""
+        needed = {'high', 'low', 'close'}
+        if not needed.issubset(self.df.columns):
+            for col in ['pivot', 'pivot_s1', 'pivot_s2', 'pivot_s3', 'pivot_r1', 'pivot_r2', 'pivot_r3']:
+                self.df[col] = np.nan
+            return self
+
+        h_prev = self.df['high'].shift(1)
+        l_prev = self.df['low'].shift(1)
+        c_prev = self.df['close'].shift(1)
+
+        pivot = (h_prev + l_prev + c_prev) / 3
+        self.df['pivot'] = pivot
+        self.df['pivot_r1'] = 2 * pivot - l_prev
+        self.df['pivot_s1'] = 2 * pivot - h_prev
+        self.df['pivot_r2'] = pivot + (h_prev - l_prev)
+        self.df['pivot_s2'] = pivot - (h_prev - l_prev)
+        self.df['pivot_r3'] = h_prev + 2 * (pivot - l_prev)
+        self.df['pivot_s3'] = l_prev - 2 * (h_prev - pivot)
+        return self
+
     def calc_atr(self) -> "DataProcessor":
         """Calculate Average True Range (14-day) for Stoploss sizing."""
         if not all(col in self.df.columns for col in ['high', 'low', 'close']):
@@ -515,22 +591,6 @@ class DataProcessor:
                 self.df['event_type'].fillna('general').astype(str).str.lower().str.strip()
             )
 
-        def latest_non_empty(series: pd.Series):
-            cleaned = series.dropna().astype(str).str.strip()
-            cleaned = cleaned[cleaned.ne("")]
-            if cleaned.empty:
-                return pd.NA
-            return cleaned.iloc[-1]
-
-        def join_unique(series: pd.Series):
-            cleaned = []
-            for value in series.dropna().astype(str).str.strip():
-                if value and value not in cleaned:
-                    cleaned.append(value)
-            if not cleaned:
-                return pd.NA
-            return " | ".join(cleaned)
-
         def dominant_label(avg_score: float) -> str:
             if avg_score > 0:
                 return "positive"
@@ -538,23 +598,20 @@ class DataProcessor:
                 return "negative"
             return "neutral"
 
-        def dominant_event(series: pd.Series) -> str:
-            non_general = series[series.ne("general")]
-            target = non_general if not non_general.empty else series
-            return target.mode().iloc[0]
-
-        grouped = self.df.groupby(['date', 'ticker'], as_index=False)
-        self.df = grouped.agg(
-            article_count=('headline', 'size'),
-            headline=('headline', latest_non_empty),
-            summary=('summary', latest_non_empty),
-            source=('source', join_unique),
-            sentiment_score=('sentiment_score', 'mean'),
-            positive_count=('sentiment_score', lambda s: int((s > 0).sum())),
-            neutral_count=('sentiment_score', lambda s: int((s == 0).sum())),
-            negative_count=('sentiment_score', lambda s: int((s < 0).sum())),
-            event_type=('event_type', dominant_event),
+        # Keep one row per article to preserve news volume after processing.
+        # Add day-level volume context for downstream joins and analytics.
+        day_counts = (
+            self.df.groupby(['date', 'ticker'])
+            .size()
+            .rename('article_count')
+            .reset_index()
         )
+        self.df = self.df.merge(day_counts, on=['date', 'ticker'], how='left')
+        self.df['article_count'] = self.df['article_count'].fillna(1).astype(int)
+
+        self.df['positive_count'] = (self.df['sentiment_score'] > 0).astype(int)
+        self.df['neutral_count'] = (self.df['sentiment_score'] == 0).astype(int)
+        self.df['negative_count'] = (self.df['sentiment_score'] < 0).astype(int)
         self.df['sentiment_score'] = self.df['sentiment_score'].astype(float)
         self.df['sentiment'] = self.df['sentiment_score'].apply(dominant_label)
         self.df = self.df[
@@ -563,13 +620,288 @@ class DataProcessor:
                 'sentiment', 'sentiment_score', 'positive_count', 'neutral_count',
                 'negative_count', 'event_type'
             ]
-        ].sort_values(['date', 'ticker']).reset_index(drop=True)
+        ].sort_values(['date', 'ticker', 'headline']).reset_index(drop=True)
 
         logger.info(
-            "[%s] process_news() done | %d daily records from %d articles",
+            "[%s] process_news() done | %d article-level records from %d articles",
             self.ticker,
             len(self.df),
-            int(self.df['article_count'].sum()),
+            len(self.df),
+        )
+        return self
+
+    # ------------------------------------------------------------------
+    # Fundamental feature engineering
+    # ------------------------------------------------------------------
+
+    def engineer_fundamental_features(self, news_df: pd.DataFrame | None = None) -> "DataProcessor":
+        """
+        Add financial-health features for fundamental analysis.
+
+        Added columns:
+          - net_debt
+          - net_debt_to_ebitda
+          - interest_coverage
+          - asset_turnover
+          - altman_z_score
+          - latest_event_type, latest_sentiment, news_article_count
+        """
+        numeric_candidates = [
+            'revenue', 'operating_profit', 'total_assets', 'total_liabilities',
+            'total_debt', 'cash', 'interest_expense', 'ebitda', 'current_assets',
+            'current_liabilities', 'retained_earnings', 'market_cap', 'equity',
+            'net_income', 'gross_profit', 'operating_cash_flow', 'capex',
+            'accounts_receivable', 'inventory', 'accounts_payable', 'cogs',
+            'short_term_investments', 'income_tax_expense', 'pre_tax_income',
+        ]
+        for column in numeric_candidates:
+            if column in self.df.columns:
+                self.df[column] = pd.to_numeric(self.df[column], errors='coerce')
+
+        if 'total_debt' in self.df.columns and 'cash' in self.df.columns:
+            self.df['net_debt'] = self.df['total_debt'] - self.df['cash']
+        else:
+            self.df['net_debt'] = np.nan
+
+        # If EBITDA is unavailable, use operating_profit as a conservative proxy for EBIT-based leverage.
+        if 'ebitda' not in self.df.columns:
+            self.df['ebitda'] = self.df['operating_profit'] if 'operating_profit' in self.df.columns else np.nan
+
+        self.df['net_debt_to_ebitda'] = np.where(
+            self.df['ebitda'].notna() & (self.df['ebitda'] != 0),
+            self.df['net_debt'] / self.df['ebitda'],
+            np.nan,
+        )
+
+        if 'interest_expense' in self.df.columns and 'operating_profit' in self.df.columns:
+            interest_base = self.df['interest_expense'].abs()
+            self.df['interest_coverage'] = np.where(
+                interest_base.notna() & (interest_base != 0),
+                self.df['operating_profit'] / interest_base,
+                np.nan,
+            )
+        else:
+            self.df['interest_coverage'] = np.nan
+
+        if 'revenue' in self.df.columns and 'total_assets' in self.df.columns:
+            self.df['asset_turnover'] = np.where(
+                self.df['total_assets'].notna() & (self.df['total_assets'] != 0),
+                self.df['revenue'] / self.df['total_assets'],
+                np.nan,
+            )
+        else:
+            self.df['asset_turnover'] = np.nan
+
+        if 'operating_profit' in self.df.columns:
+            self.df['ebit'] = self.df['operating_profit']
+        else:
+            self.df['ebit'] = np.nan
+
+        # Profitability block
+        self.df['gross_profit_margin'] = np.where(
+            self.df.get('revenue', pd.Series(np.nan, index=self.df.index)).notna()
+            & (self.df.get('revenue', pd.Series(np.nan, index=self.df.index)) != 0),
+            self.df.get('gross_profit', pd.Series(np.nan, index=self.df.index))
+            / self.df.get('revenue', pd.Series(np.nan, index=self.df.index)),
+            np.nan,
+        )
+        self.df['net_profit_margin'] = np.where(
+            self.df.get('revenue', pd.Series(np.nan, index=self.df.index)).notna()
+            & (self.df.get('revenue', pd.Series(np.nan, index=self.df.index)) != 0),
+            self.df.get('net_income', pd.Series(np.nan, index=self.df.index))
+            / self.df.get('revenue', pd.Series(np.nan, index=self.df.index)),
+            np.nan,
+        )
+
+        # Liquidity block
+        self.df['current_ratio'] = np.where(
+            self.df.get('current_liabilities', pd.Series(np.nan, index=self.df.index)).notna()
+            & (self.df.get('current_liabilities', pd.Series(np.nan, index=self.df.index)) != 0),
+            self.df.get('current_assets', pd.Series(np.nan, index=self.df.index))
+            / self.df.get('current_liabilities', pd.Series(np.nan, index=self.df.index)),
+            np.nan,
+        )
+        self.df['quick_ratio'] = np.where(
+            self.df.get('current_liabilities', pd.Series(np.nan, index=self.df.index)).notna()
+            & (self.df.get('current_liabilities', pd.Series(np.nan, index=self.df.index)) != 0),
+            (
+                self.df.get('cash', pd.Series(np.nan, index=self.df.index))
+                + self.df.get('short_term_investments', pd.Series(0.0, index=self.df.index)).fillna(0)
+                + self.df.get('accounts_receivable', pd.Series(0.0, index=self.df.index)).fillna(0)
+            ) / self.df.get('current_liabilities', pd.Series(np.nan, index=self.df.index)),
+            np.nan,
+        )
+        self.df['cash_ratio'] = np.where(
+            self.df.get('current_liabilities', pd.Series(np.nan, index=self.df.index)).notna()
+            & (self.df.get('current_liabilities', pd.Series(np.nan, index=self.df.index)) != 0),
+            (
+                self.df.get('cash', pd.Series(np.nan, index=self.df.index))
+                + self.df.get('short_term_investments', pd.Series(0.0, index=self.df.index)).fillna(0)
+            ) / self.df.get('current_liabilities', pd.Series(np.nan, index=self.df.index)),
+            np.nan,
+        )
+
+        # Solvency block
+        self.df['debt_to_assets'] = np.where(
+            self.df.get('total_assets', pd.Series(np.nan, index=self.df.index)).notna()
+            & (self.df.get('total_assets', pd.Series(np.nan, index=self.df.index)) != 0),
+            self.df.get('total_debt', pd.Series(np.nan, index=self.df.index))
+            / self.df.get('total_assets', pd.Series(np.nan, index=self.df.index)),
+            np.nan,
+        )
+        self.df['debt_to_capital'] = np.where(
+            (
+                self.df.get('total_debt', pd.Series(np.nan, index=self.df.index))
+                + self.df.get('equity', pd.Series(np.nan, index=self.df.index))
+            ).notna()
+            & (
+                self.df.get('total_debt', pd.Series(np.nan, index=self.df.index))
+                + self.df.get('equity', pd.Series(np.nan, index=self.df.index))
+            != 0),
+            self.df.get('total_debt', pd.Series(np.nan, index=self.df.index))
+            / (
+                self.df.get('total_debt', pd.Series(np.nan, index=self.df.index))
+                + self.df.get('equity', pd.Series(np.nan, index=self.df.index))
+            ),
+            np.nan,
+        )
+        self.df['financial_leverage'] = np.where(
+            self.df.get('equity', pd.Series(np.nan, index=self.df.index)).notna()
+            & (self.df.get('equity', pd.Series(np.nan, index=self.df.index)) != 0),
+            self.df.get('total_assets', pd.Series(np.nan, index=self.df.index))
+            / self.df.get('equity', pd.Series(np.nan, index=self.df.index)),
+            np.nan,
+        )
+
+        # Activity block (quarterly approximation)
+        avg_receivable = (
+            self.df.get('accounts_receivable', pd.Series(np.nan, index=self.df.index))
+            + self.df.get('accounts_receivable', pd.Series(np.nan, index=self.df.index)).shift(1)
+        ) / 2
+        avg_inventory = (
+            self.df.get('inventory', pd.Series(np.nan, index=self.df.index))
+            + self.df.get('inventory', pd.Series(np.nan, index=self.df.index)).shift(1)
+        ) / 2
+        avg_payable = (
+            self.df.get('accounts_payable', pd.Series(np.nan, index=self.df.index))
+            + self.df.get('accounts_payable', pd.Series(np.nan, index=self.df.index)).shift(1)
+        ) / 2
+
+        self.df['receivable_turnover'] = np.where(
+            avg_receivable.notna() & (avg_receivable != 0),
+            self.df.get('revenue', pd.Series(np.nan, index=self.df.index)) / avg_receivable,
+            np.nan,
+        )
+        self.df['days_sales_outstanding'] = np.where(
+            self.df['receivable_turnover'].notna() & (self.df['receivable_turnover'] != 0),
+            365 / self.df['receivable_turnover'],
+            np.nan,
+        )
+
+        self.df['inventory_turnover'] = np.where(
+            avg_inventory.notna() & (avg_inventory != 0),
+            self.df.get('cogs', pd.Series(np.nan, index=self.df.index)) / avg_inventory,
+            np.nan,
+        )
+        self.df['days_inventory_outstanding'] = np.where(
+            self.df['inventory_turnover'].notna() & (self.df['inventory_turnover'] != 0),
+            365 / self.df['inventory_turnover'],
+            np.nan,
+        )
+
+        purchase = (
+            self.df.get('inventory', pd.Series(np.nan, index=self.df.index))
+            - self.df.get('inventory', pd.Series(np.nan, index=self.df.index)).shift(1)
+            + self.df.get('cogs', pd.Series(np.nan, index=self.df.index))
+        )
+        self.df['payable_turnover'] = np.where(
+            avg_payable.notna() & (avg_payable != 0),
+            purchase / avg_payable,
+            np.nan,
+        )
+        self.df['days_payable_outstanding'] = np.where(
+            self.df['payable_turnover'].notna() & (self.df['payable_turnover'] != 0),
+            365 / self.df['payable_turnover'],
+            np.nan,
+        )
+        self.df['cash_conversion_cycle'] = (
+            self.df['days_sales_outstanding']
+            + self.df['days_inventory_outstanding']
+            - self.df['days_payable_outstanding']
+        )
+
+        # Cash flow block
+        capex = self.df.get('capex', pd.Series(np.nan, index=self.df.index)).abs()
+        self.df['fcf'] = self.df.get('operating_cash_flow', pd.Series(np.nan, index=self.df.index)) - capex
+        tax_rate = np.where(
+            self.df.get('pre_tax_income', pd.Series(np.nan, index=self.df.index)).notna()
+            & (self.df.get('pre_tax_income', pd.Series(np.nan, index=self.df.index)) != 0),
+            self.df.get('income_tax_expense', pd.Series(np.nan, index=self.df.index))
+            / self.df.get('pre_tax_income', pd.Series(np.nan, index=self.df.index)),
+            0.21,
+        )
+        net_borrowing = self.df.get('total_debt', pd.Series(np.nan, index=self.df.index)).diff()
+        self.df['fcff'] = (
+            self.df.get('operating_cash_flow', pd.Series(np.nan, index=self.df.index))
+            + self.df.get('interest_expense', pd.Series(np.nan, index=self.df.index)).abs() * (1 - tax_rate)
+            - capex
+        )
+        self.df['fcfe'] = self.df['fcf'] + net_borrowing
+
+        # Altman Z-score (public manufacturing form) with graceful NaN fallback.
+        wc = self.df['current_assets'] - self.df['current_liabilities'] if {'current_assets', 'current_liabilities'}.issubset(self.df.columns) else np.nan
+        retained_earnings = self.df['retained_earnings'] if 'retained_earnings' in self.df.columns else np.nan
+        market_value_equity = self.df['market_cap'] if 'market_cap' in self.df.columns else self.df.get('equity', np.nan)
+        total_assets = self.df['total_assets'] if 'total_assets' in self.df.columns else np.nan
+        total_liabilities = self.df['total_liabilities'] if 'total_liabilities' in self.df.columns else np.nan
+        sales = self.df['revenue'] if 'revenue' in self.df.columns else np.nan
+
+        x1 = np.where(pd.notna(total_assets) & (total_assets != 0), wc / total_assets, np.nan)
+        x2 = np.where(pd.notna(total_assets) & (total_assets != 0), retained_earnings / total_assets, np.nan)
+        x3 = np.where(pd.notna(total_assets) & (total_assets != 0), self.df['ebit'] / total_assets, np.nan)
+        x4 = np.where(pd.notna(total_liabilities) & (total_liabilities != 0), market_value_equity / total_liabilities, np.nan)
+        x5 = np.where(pd.notna(total_assets) & (total_assets != 0), sales / total_assets, np.nan)
+        self.df['altman_z_score'] = 1.2 * x1 + 1.4 * x2 + 3.3 * x3 + 0.6 * x4 + 1.0 * x5
+
+        self.df['latest_event_type'] = pd.NA
+        self.df['latest_sentiment'] = pd.NA
+        self.df['news_article_count'] = 0
+        if news_df is not None and not news_df.empty and {'date', 'ticker'}.issubset(news_df.columns):
+            tmp = news_df.copy()
+            tmp['date'] = pd.to_datetime(tmp['date'], errors='coerce')
+            if 'article_count' not in tmp.columns:
+                tmp['article_count'] = 1
+            grouped = (
+                tmp.sort_values('date')
+                .groupby(['date', 'ticker'], as_index=False)
+                .agg(
+                    latest_event_type=('event_type', 'last'),
+                    latest_sentiment=('sentiment', 'last'),
+                    news_article_count=('article_count', 'sum'),
+                )
+            )
+            merged = pd.merge(
+                self.df,
+                grouped,
+                on=['date', 'ticker'],
+                how='left',
+                suffixes=('', '_news'),
+            )
+            for col in ['latest_event_type', 'latest_sentiment']:
+                news_col = f"{col}_news"
+                if news_col in merged.columns:
+                    merged[col] = merged[news_col].combine_first(merged[col])
+                    merged = merged.drop(columns=[news_col])
+            if 'news_article_count_news' in merged.columns:
+                merged['news_article_count'] = (
+                    merged['news_article_count_news'].fillna(merged['news_article_count']).fillna(0).astype(int)
+                )
+                merged = merged.drop(columns=['news_article_count_news'])
+            self.df = merged
+
+        logger.info(
+            "[%s] engineer_fundamental_features done | added leverage/coverage/zscore/turnover/news columns",
+            self.ticker,
         )
         return self
 
@@ -607,6 +939,8 @@ class DataProcessor:
         self.calc_bollinger_bands()
         self.calc_max_drawdown()
         self.calc_momentum_oscillators()
+        self.calc_extended_oscillators()
+        self.calc_pivot_points()
         self.calc_atr()
         self.calc_sharpe_ratio()
 
@@ -626,7 +960,7 @@ class DataProcessor:
 
     def _save_csv(self, filename: str | None = None) -> Path:
         """
-        Save the current state of self.df to data/processed/.
+        Save the current state of self.df to data/processed/processed_data/.
 
         Parameters
         ----------
@@ -641,6 +975,6 @@ class DataProcessor:
         filename = filename or f"{self.ticker}_processed.csv"
         filepath = PROCESSED_DATA_DIR / filename
         self.df.to_csv(filepath, index = False)
-        logger.info("Saved processed data ??' %s", filepath)
+        logger.info("Saved processed data -> %s", filepath)
         return filepath
 

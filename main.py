@@ -159,6 +159,12 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Skip the AI analysis stage (useful for offline testing).",
     )
+    parser.add_argument(
+        "--timeframe",
+        default="daily",
+        choices=["daily", "weekly", "monthly", "yearly", "all"],
+        help="Chart timeframe for auto-visualization export (default: %(default)s).",
+    )
     return parser
 
 
@@ -219,49 +225,7 @@ def build_processors(raw_data: dict) -> dict:
             logger.info("  Processing peer: %s", ticker)
             processed["peers"][ticker] = DataProcessor(df=df, ticker=ticker).run_pipeline()
 
-        # 4. Fundamental data - clean, normalise, save
-    processed["fundamental"] = {}
-    for ticker, df in raw_data.get("fundamental", {}).items():
-        if df is not None and not df.empty:
-            logger.info("  Processing fundamental: %s", ticker)
-            p = DataProcessor(df=df, ticker=ticker)
-            p.normalise_types()
-            p.remove_duplicates()
-            p.handle_missing_values(strategy="ffill")
-            all_nan = [c for c in p.df.columns if p.df[c].isna().all()]
-            if all_nan:
-                p.df = p.df.drop(columns=all_nan)
-                logger.info("  Dropped all-NaN columns for %s fundamental: %s", ticker, all_nan)
-            processed["fundamental"][ticker] = p.df
-            p._save_csv(filename=f"{ticker}_fundamental_processed.csv")
-
-    # 5. Macro - clean, normalise, save
-    macro_df = raw_data.get("macro")
-    if macro_df is not None and not macro_df.empty:
-        logger.info("  Processing macro indicators")
-        p = DataProcessor(df=macro_df, ticker="macro")
-        p.normalise_types()
-        p.remove_duplicates()
-        p.handle_missing_values(strategy="ffill")
-        processed["macro"] = p.df
-        p._save_csv(filename="macro_processed.csv")
-
-    # 6. Industry - clean, normalise, save
-    industry_df = raw_data.get("industry")
-    if industry_df is not None and not industry_df.empty:
-        logger.info("  Processing industry data")
-        p = DataProcessor(df=industry_df, ticker="industry")
-        p.normalise_types()
-        p.remove_duplicates()
-        p.handle_missing_values(strategy="ffill")
-        all_nan = [c for c in p.df.columns if p.df[c].isna().all()]
-        if all_nan:
-            p.df = p.df.drop(columns=all_nan)
-            logger.info("  Dropped all-NaN columns for industry: %s", all_nan)
-        processed["industry"] = p.df
-        p._save_csv(filename="industry_processed.csv")
-
-    # 7. News - clean, encode sentiment, save
+    # 4. News - clean, encode sentiment, save
     news_df = raw_data.get("news")
     if news_df is not None and not news_df.empty:
         logger.info("  Processing news/sentiment data")
@@ -278,6 +242,41 @@ def build_processors(raw_data: dict) -> dict:
             ]
         )
         DataProcessor(df=processed["news"], ticker="news")._save_csv(filename="news_processed.csv")
+
+    # 5. Fundamental data - clean, normalise, enrich, save
+    processed["fundamental"] = {}
+    for ticker, df in raw_data.get("fundamental", {}).items():
+        if df is not None and not df.empty:
+            logger.info("  Processing fundamental: %s", ticker)
+            p = DataProcessor(df=df, ticker=ticker)
+            p.normalise_types()
+            p.remove_duplicates()
+            p.handle_missing_values(strategy="ffill")
+            p.engineer_fundamental_features(news_df=processed.get("news"))
+            processed["fundamental"][ticker] = p.df
+            p._save_csv(filename=f"{ticker}_fundamental_processed.csv")
+
+    # 6. Macro - clean, normalise, save
+    macro_df = raw_data.get("macro")
+    if macro_df is not None and not macro_df.empty:
+        logger.info("  Processing macro indicators")
+        p = DataProcessor(df=macro_df, ticker="macro")
+        p.normalise_types()
+        p.remove_duplicates()
+        p.handle_missing_values(strategy="ffill")
+        processed["macro"] = p.df
+        p._save_csv(filename="macro_processed.csv")
+
+    # 7. Industry - clean, normalise, save
+    industry_df = raw_data.get("industry")
+    if industry_df is not None and not industry_df.empty:
+        logger.info("  Processing industry data")
+        p = DataProcessor(df=industry_df, ticker="industry")
+        p.normalise_types()
+        p.remove_duplicates()
+        p.handle_missing_values(strategy="ffill")
+        processed["industry"] = p.df
+        p._save_csv(filename="industry_processed.csv")
 
     logger.info("Wrapper: build_processors() hoan tat.")
     return processed
@@ -341,12 +340,111 @@ def run_processing(raw_data: dict) -> dict:
     return processed_data
 
 
-def run_visualisation(processed_data: dict) -> None:
-    """Stage 3 - generate all four chart types."""
+def run_visualisation(processed_data: dict, timeframe: str = "daily") -> None:
+    """Stage 3 - auto export charts only for user-requested tickers (prices)."""
     logger.info("Stage 3: Visualisation")
-    visualizer = DataVisualizer(data=processed_data)
-    # TODO: visualizer.render_all()
+
+    chart_frames = {}
+
+    for ticker, df in processed_data.get("prices", {}).items():
+        if df is not None and not df.empty:
+            chart_frames[ticker] = df
+
+    if not chart_frames:
+        logger.warning("No chart-ready price frames found. Skipping visualisation stage.")
+        return
+
+    visualizer = DataVisualizer(data=chart_frames)
+    visualizer.render_all(timeframe=timeframe, chart_type="candlestick", include_rolling=True)
     logger.info("Visualisation complete.")
+
+
+def generate_checklist_report(processed_data: dict) -> None:
+    """Stage 5 - auto pass/fail checklist based on processed data columns and row counts."""
+
+    # ---------------------------------------------------------------
+    # Define expected columns per data category
+    # ---------------------------------------------------------------
+    _PRICE_COLS = [
+        "open", "high", "low", "close", "volume",
+        "rsi_14", "macd_line", "macd_signal", "atr_14",
+        "sharpe_ratio", "beta", "relative_strength",
+        "stoch_k", "stoch_d", "adx_14", "williams_r_14", "cci_14",
+        "ultimate_oscillator", "roc_12",
+        "pivot", "pivot_s1", "pivot_r1",
+    ]
+    _FUNDAMENTAL_COLS = [
+        "current_ratio", "quick_ratio", "cash_ratio",
+        "debt_to_assets", "debt_to_capital", "financial_leverage",
+        "receivable_turnover", "inventory_turnover", "cash_conversion_cycle",
+        "fcf", "fcff", "fcfe",
+        "gross_profit_margin", "net_profit_margin", "roe", "roa",
+        "pe", "pb",
+    ]
+    _MACRO_COLS = [
+        "fed_funds_rate", "us_10y_yield", "us_cpi",
+        "gdp", "unemployment_rate",
+        "dxy", "gold_price", "oil_price",
+        "fx_rate", "domestic_interest_rate", "fdi_inflow",
+    ]
+    _INDUSTRY_COLS = ["industry_roe", "industry_margin", "industry_pe", "industry_pb"]
+    _NEWS_COLS     = ["sentiment", "sentiment_score", "event_type"]
+
+    results = []   # list of (section, item, status, note)
+
+    def check_df(label: str, df, required_cols: list[str], min_rows: int = 1) -> None:
+        if df is None or (hasattr(df, "empty") and df.empty):
+            results.append((label, "dataframe", "FAIL", "empty or None"))
+            return
+        row_count = len(df)
+        results.append((label, "row_count", "PASS" if row_count >= min_rows else "FAIL",
+                         f"{row_count} rows"))
+        for col in required_cols:
+            present   = col in df.columns
+            non_null  = int(df[col].notna().sum()) if present else 0
+            pct       = round(100 * non_null / row_count, 1) if row_count else 0
+            status    = "PASS" if present and non_null > 0 else ("WARN" if present else "FAIL")
+            note      = f"{pct}% non-null" if present else "missing column"
+            results.append((label, col, status, note))
+
+    # ---------------------------------------------------------------
+    # Run checks
+    # ---------------------------------------------------------------
+    prices_dict = processed_data.get("prices", {})
+    for ticker, df in prices_dict.items():
+        check_df(f"price:{ticker}", df, _PRICE_COLS, min_rows=100)
+
+    fundamental_dict = processed_data.get("fundamental", {})
+    for ticker, df in fundamental_dict.items():
+        check_df(f"fundamental:{ticker}", df, _FUNDAMENTAL_COLS, min_rows=1)
+
+    check_df("macro",    processed_data.get("macro"),    _MACRO_COLS,    min_rows=10)
+    check_df("industry", processed_data.get("industry"), _INDUSTRY_COLS, min_rows=1)
+    check_df("news",     processed_data.get("news"),     _NEWS_COLS,     min_rows=1)
+
+    # ---------------------------------------------------------------
+    # Print summary table
+    # ---------------------------------------------------------------
+    pass_n = sum(1 for _, _, s, _ in results if s == "PASS")
+    warn_n = sum(1 for _, _, s, _ in results if s == "WARN")
+    fail_n = sum(1 for _, _, s, _ in results if s == "FAIL")
+
+    separator = "-" * 72
+    logger.info(separator)
+    logger.info("CHECKLIST REPORT   PASS:%d  WARN:%d  FAIL:%d  (total %d checks)",
+                pass_n, warn_n, fail_n, len(results))
+    logger.info(separator)
+    logger.info("%-28s %-26s %-6s %s", "SECTION", "ITEM", "STATUS", "NOTE")
+    logger.info(separator)
+    for section, item, status, note in results:
+        if status != "PASS":   # only print non-pass rows to keep log concise
+            logger.info("%-28s %-26s %-6s %s", section[:28], item[:26], status, note)
+    logger.info(separator)
+    if fail_n == 0 and warn_n == 0:
+        logger.info("All checks PASSED.")
+    else:
+        logger.info("Review WARN/FAIL rows above. WARNs = column present but all NaN.")
+    logger.info(separator)
 
 
 def run_ai_analysis(processed_data: dict, provider: str) -> dict[str, str]:
@@ -373,16 +471,19 @@ def main() -> None:
     logger.info("Tickers : %s", args.tickers)
     logger.info("Period  : %s to %s", args.start, args.end)
     logger.info("Provider: %s", args.provider)
+    logger.info("Charts  : timeframe=%s", args.timeframe)
 
     try:
         raw_data       = run_collection(args.tickers, args.start, args.end)
         processed_data = run_processing(raw_data)
-        run_visualisation(processed_data)
+        run_visualisation(processed_data, timeframe=args.timeframe)
 
         if not args.skip_ai:
             reports = run_ai_analysis(processed_data, args.provider)
             for section, content in reports.items():
                 logger.info("[AI] %s:\n%s", section.upper(), content)
+
+        generate_checklist_report(processed_data)
 
     except KeyboardInterrupt:
         logger.warning("Pipeline interrupted by user.")

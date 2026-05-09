@@ -126,6 +126,18 @@ class DataCollector:
         "VGI":   ["FPT", "CMG", "FOX", "ELC", "ITD"],
     }
 
+    # VN tickers: yfinance sector/cap info unreliable → always use _PEER_MAP
+    _VN_TICKERS = {
+        "VCB", "BID", "LPB", "MSB", "BVB", "ABB",
+        "VHM", "VIC", "KDH", "NLG", "DRH", "HQC",
+        "VNM", "MSN", "PAN", "VHC", "ANV", "IDI",
+        "SSI", "VND", "VCI", "HCM", "BSI", "FTS",
+        "HPG", "GVR", "HSG", "NKG", "TVN", "VGS",
+        "GAS", "PLX", "PVS", "PVD", "PVC", "PVB",
+        "MWG", "PNJ", "FRT", "DGW", "PET", "ASG",
+        "FPT", "VGI", "CMG", "FOX", "ELC", "ITD",
+    }
+
     _MACRO_TICKERS = {
         "gold_price":    "GC=F",
         "oil_price":     "CL=F",
@@ -248,7 +260,9 @@ class DataCollector:
                 self._text_contains_term(text, keyword)
                 for keyword in self._NEWS_FINANCE_CONTEXT_KEYWORDS
             )
-            return alias_match and finance_context
+            # Keep alias hits even when finance keywords are sparse;
+            # for raw ticker hits, still require finance context to limit false positives.
+            return alias_match or (ticker_match and finance_context)
 
         if strong_terms:
             return alias_match or ticker_match
@@ -316,7 +330,7 @@ class DataCollector:
                 try:
                     raw = yf.download(ticker, start=self.start_date, end=self.end_date,
                                       auto_adjust=True, progress=False)
-                    if not raw.empty:
+                    if raw is not None and not raw.empty:
                         df = self._flatten(raw)
                         df.insert(1, "ticker", ticker)
                         df["adj_close"] = df["close"]
@@ -347,7 +361,7 @@ class DataCollector:
         try:
             raw = yf.download(symbol, start=self.start_date, end=self.end_date,
                               auto_adjust=True, progress=False)
-            if raw.empty:
+            if raw is None or raw.empty:
                 return pd.DataFrame()
             df = self._flatten(raw)
             df.insert(1, "ticker", symbol)
@@ -367,7 +381,7 @@ class DataCollector:
         """
         if peers is None:
             primary = self.tickers[0] if self.tickers else ""
-            peers = self._PEER_MAP.get(primary, [t for t in self.tickers if t != primary])
+            peers = self._resolve_dynamic_peers(primary)
         if not peers:
             logger.warning("No peers resolved.")
             return {}
@@ -377,7 +391,7 @@ class DataCollector:
             try:
                 raw = yf.download(ticker, start=self.start_date, end=self.end_date,
                                   auto_adjust=True, progress=False)
-                if raw.empty:
+                if raw is None or raw.empty:
                     continue
                 df = self._flatten(raw)
                 df.insert(1, "ticker", ticker)
@@ -391,6 +405,65 @@ class DataCollector:
             except Exception as e:
                 logger.error("Failed peer %s: %s", ticker, e)
         return peer_map
+
+    def _market_cap_bucket(self, market_cap):
+        if market_cap is None or pd.isna(market_cap):
+            return None
+        if market_cap >= 10_000_000_000:
+            return "large"
+        if market_cap >= 2_000_000_000:
+            return "mid"
+        return "small"
+
+    def _resolve_dynamic_peers(self, primary: str) -> list[str]:
+        """Resolve peers dynamically by sector and market-cap bucket with static fallback."""
+        primary = (primary or "").upper()
+        if not primary:
+            return []
+
+        fallback = self._PEER_MAP.get(primary, [t for t in self.tickers if t != primary])
+
+        # VN tickers: yfinance sector/cap data is unreliable → skip dynamic lookup
+        if primary in self._VN_TICKERS:
+            logger.debug("VN ticker %s: using static _PEER_MAP (dynamic lookup skipped).", primary)
+            return fallback
+
+        try:
+            p_info = yf.Ticker(primary).info or {}
+            p_sector = p_info.get("sector")
+            p_cap = p_info.get("marketCap")
+            p_bucket = self._market_cap_bucket(p_cap)
+            if not p_sector:
+                return fallback
+
+            candidates = set(self._PEER_MAP.keys())
+            for vals in self._PEER_MAP.values():
+                candidates.update(vals)
+            candidates.update(t.upper() for t in self.tickers)
+            candidates.discard(primary)
+
+            scored = []
+            for candidate in sorted(candidates):
+                try:
+                    info = yf.Ticker(candidate).info or {}
+                    c_sector = info.get("sector")
+                    c_cap = info.get("marketCap")
+                    c_bucket = self._market_cap_bucket(c_cap)
+                    if c_sector == p_sector and c_bucket == p_bucket and c_cap is not None and p_cap is not None:
+                        scored.append((abs(float(c_cap) - float(p_cap)), candidate))
+                except Exception:
+                    continue
+
+            dynamic = [ticker for _, ticker in sorted(scored, key=lambda x: x[0])][:5]
+            for ticker in fallback:
+                if ticker not in dynamic:
+                    dynamic.append(ticker)
+                if len(dynamic) >= 5:
+                    break
+            return dynamic
+        except Exception as e:
+            logger.warning("Dynamic peer resolution failed for %s: %s", primary, e)
+            return fallback
 
     # ------------------------------------------------------------------ C. Fundamental Data
 
@@ -442,6 +515,11 @@ class DataCollector:
             assets = _v(_row(balance, "Total Assets"))
             equity = _v(_row(balance, "Stockholders Equity", "Common Stock Equity"))
             debt = _v(_row(balance, "Total Debt"))
+            current_assets = _v(_row(balance, "Current Assets"))
+            current_liabilities = _v(_row(balance, "Current Liabilities"))
+            retained_earnings = _v(_row(balance, "Retained Earnings"))
+            interest_expense = _v(_row(income, "Interest Expense"))
+            ebitda = _v(_row(income, "EBITDA"))
             
 
             if rev is None and net_inc is None and assets is None and equity is None:
@@ -463,6 +541,14 @@ class DataCollector:
             if eps is None and net_inc is not None and shares is not None and shares != 0:
                 eps = net_inc / shares # Lợi nhuận ròng / Số cổ phiếu
             cfo = _v(_row(cash_flow, "Operating Cash Flow", "Total Cash From Operating Activities"))
+            capex = _v(_row(cash_flow, "Capital Expenditure", "Capital Expenditures"))
+            receivables = _v(_row(balance, "Accounts Receivable", "Receivables"))
+            inventory = _v(_row(balance, "Inventory"))
+            payables = _v(_row(balance, "Accounts Payable", "Payables"))
+            cogs = _v(_row(income, "Cost Of Revenue", "Cost Of Goods And Services Sold"))
+            short_term_investments = _v(_row(balance, "Other Short Term Investments", "Cash Cash Equivalents And Short Term Investments"))
+            income_tax_expense = _v(_row(income, "Tax Provision", "Income Tax Expense"))
+            pre_tax_income = _v(_row(income, "Pretax Income", "Income Before Tax"))
             rows.append({
                 "date":               pd.Timestamp(date).strftime("%Y-%m-%d"),
                 "ticker":             ticker,
@@ -477,6 +563,19 @@ class DataCollector:
                 "total_debt":         debt,
                 "cash":               _v(_row(balance, "Cash And Cash Equivalents")),
                 "operating_cash_flow": cfo,
+                "capex":              capex,
+                "accounts_receivable": receivables,
+                "inventory":          inventory,
+                "accounts_payable":   payables,
+                "cogs":               cogs,
+                "short_term_investments": short_term_investments,
+                "income_tax_expense": income_tax_expense,
+                "pre_tax_income":     pre_tax_income,
+                "current_assets":      current_assets,
+                "current_liabilities": current_liabilities,
+                "retained_earnings":   retained_earnings,
+                "interest_expense":    interest_expense,
+                "ebitda":              ebitda,
                 "roe":                roe,
                 "roa":                roa,
                 "margin":             margin,
@@ -495,14 +594,18 @@ class DataCollector:
             return float(v) if v is not None else None
 
         import numpy as np
-        df["pe"]                 = np.nan 
-        df["pb"]                 = np.nan 
+        df["pe"]                 = _i("trailingPE")
+        df["pb"]                 = _i("priceToBook")
         df["dividend"]           = _i("dividendRate")
+        df["market_cap"]         = _i("marketCap")
 
         cols = [
             "date", "ticker",
             "revenue", "gross_profit", "operating_profit", "net_income", "eps",
             "total_assets", "total_liabilities", "equity", "total_debt", "cash", "operating_cash_flow",
+            "capex", "accounts_receivable", "inventory", "accounts_payable", "cogs",
+            "short_term_investments", "income_tax_expense", "pre_tax_income",
+            "current_assets", "current_liabilities", "retained_earnings", "interest_expense", "ebitda", "market_cap",
             "roe", "roa", "pe", "pb", "margin", "debt_to_equity",
             "shares_outstanding", "bvps", "dividend",
         ]
@@ -510,7 +613,7 @@ class DataCollector:
 
     # ------------------------------------------------------------------ D. News & Sentiment
 
-    def fetch_news(self, query, page_size=20):
+    def fetch_news(self, query, page_size=50):
         """
         Schema (news_df): date, ticker, headline, summary, source, sentiment, event_type
         sentiment  : positive | negative | neutral
@@ -524,7 +627,7 @@ class DataCollector:
             for ticker in self.tickers:
                 ticker_query = self._build_ticker_news_query(ticker, query)
                 r = requests.get("https://newsapi.org/v2/everything", timeout=10, params={
-                    "q": ticker_query, "pageSize": page_size,
+                    "q": ticker_query, "pageSize": min(int(page_size), 100),
                     "apiKey": self.news_api_key, "language": "en", "sortBy": "publishedAt",
                 })
                 r.raise_for_status()
@@ -604,7 +707,9 @@ class DataCollector:
         fred_indicators = {
             "fed_funds_rate": "FEDFUNDS",
             "us_10y_yield": "DGS10",  
-            "us_cpi": "CPIAUCSL"
+            "us_cpi": "CPIAUCSL",
+            "gdp": "GDP",
+            "unemployment_rate": "UNRATE",
         }
         
         for name, series_id in fred_indicators.items():
@@ -645,14 +750,15 @@ class DataCollector:
         yf_indicators = {
             "dxy": "DX-Y.NYB",       
             "gold_price": "GC=F",    
-            "oil_price": "CL=F"      
+            "oil_price": "CL=F",
+            "fx_rate": "USDVND=X",
         }
 
         for name, symbol in yf_indicators.items():
             logger.info("Fetching macro from yfinance: %s (%s) ...", name, symbol)
             try:
                 raw = yf.download(symbol, start=self.start_date, end=self.end_date, auto_adjust=True, progress=False)
-                if not raw.empty:
+                if raw is not None and not raw.empty:
                     df = self._flatten(raw)
                     df = df[["date", "close"]].rename(columns={"close": name})
                     df["date"] = pd.to_datetime(df["date"]) 
@@ -662,7 +768,37 @@ class DataCollector:
                 logger.error("Failed yfinance macro %s: %s", name, e)
 
         # =================================================================
-        # 3. GỘP BẢNG VÀ LÀM SẠCH DỮ LIỆU
+        # 3. FDI INFLOW TỪ WORLD BANK API (annual, forward-fill to daily)
+        # =================================================================
+        # Indicator: BX.KLT.DINV.CD.WD = Net FDI inflows (BoP, current USD)
+        try:
+            start_year = pd.Timestamp(self.start_date).year
+            end_year   = pd.Timestamp(self.end_date).year
+            wb_url = (
+                f"https://api.worldbank.org/v2/country/US/indicator/"
+                f"BX.KLT.DINV.CD.WD?format=json&date={start_year}:{end_year}&per_page=50"
+            )
+            resp = requests.get(wb_url, timeout=10)
+            resp.raise_for_status()
+            payload = resp.json()
+            if isinstance(payload, list) and len(payload) > 1 and payload[1]:
+                wb_rows = [
+                    {"date": pd.Timestamp(f"{r['date']}-01-01"), "fdi_inflow": r["value"]}
+                    for r in payload[1] if r.get("value") is not None
+                ]
+                if wb_rows:
+                    fdi_df = pd.DataFrame(wb_rows).set_index("date").sort_index()
+                    data_frames.append(fdi_df)
+                    logger.info("FDI inflow fetched from World Bank: %d annual rows.", len(fdi_df))
+                else:
+                    logger.warning("World Bank FDI: no valid rows returned.")
+            else:
+                logger.warning("World Bank FDI: unexpected response format.")
+        except Exception as e:
+            logger.error("Failed World Bank FDI fetch: %s", e)
+
+        # =================================================================
+        # 4. GỘP BẢNG VÀ LÀM SẠCH DỮ LIỆU
         # =================================================================
         if not data_frames:
             logger.warning("No macro data fetched.")
@@ -682,6 +818,19 @@ class DataCollector:
 
         # Định dạng lại chuỗi ngày tháng cho chuẩn Form
         macro_df["date"] = macro_df["date"].dt.strftime("%Y-%m-%d")
+
+        expected_cols = [
+            "date", "fed_funds_rate", "us_10y_yield", "us_cpi",
+            "dxy", "gold_price", "oil_price", "gdp", "unemployment_rate",
+            "domestic_interest_rate", "fx_rate", "fdi_inflow",
+        ]
+        for col in expected_cols:
+            if col not in macro_df.columns:
+                macro_df[col] = np.nan
+        # Provide market-aware default for domestic policy-rate proxy.
+        if "domestic_interest_rate" in macro_df.columns:
+            macro_df["domestic_interest_rate"] = macro_df["domestic_interest_rate"].fillna(macro_df.get("fed_funds_rate"))
+        macro_df = macro_df[expected_cols]
 
         df = self._validate_df(macro_df, "macro_df_wide")
         self._save_csv(df, "macro_indicators.csv")
@@ -710,6 +859,18 @@ class DataCollector:
                 inc = t.quarterly_financials
                 bal = t.quarterly_balance_sheet
 
+                # Fetch price history to get close price at each quarter-end date
+                try:
+                    price_hist = t.history(start=self.start_date, end=self.end_date, interval="1d")
+                    if isinstance(price_hist.index, pd.DatetimeIndex):
+                        if price_hist.index.tz is not None:
+                            price_hist.index = price_hist.index.tz_localize(None)
+                    else:
+                        price_hist.index = pd.to_datetime(price_hist.index, errors='coerce')
+                    price_series = price_hist["Close"] if "Close" in price_hist.columns else None
+                except Exception:
+                    price_series = None
+
                 dates = set()
                 if inc is not None and not inc.empty: dates.update(inc.columns)
                 if bal is not None and not bal.empty: dates.update(bal.columns)
@@ -724,15 +885,40 @@ class DataCollector:
                     net_inc = _v(inc, "Net Income")
                     rev = _v(inc, "Total Revenue")
                     eq = _v(bal, "Stockholders Equity", "Common Stock Equity")
+                    shares = _v(bal, "Ordinary Shares Number", "Share Issued")
                         
                     roe = (net_inc / eq) if (net_inc and eq and eq != 0) else None
                     margin = (net_inc / rev) if (net_inc and rev and rev != 0) else None
-                    
+
+                    # Get close price on or before this quarter-end date
+                    price_at_date = None
+                    if price_series is not None and not price_series.empty:
+                        d_ts = pd.Timestamp(d).tz_localize(None)
+                        eligible = price_series[price_series.index <= d_ts]
+                        if not eligible.empty:
+                            price_at_date = float(eligible.iloc[-1])
+
+                    # PE = price / (net_income / shares)
+                    pe = None
+                    if price_at_date and net_inc and shares and shares > 0:
+                        eps = net_inc / shares
+                        if eps > 0:
+                            pe = price_at_date / eps
+
+                    # PB = price / (equity / shares)
+                    pb = None
+                    if price_at_date and eq and shares and shares > 0:
+                        bvps = eq / shares
+                        if bvps > 0:
+                            pb = price_at_date / bvps
+
                     if roe is not None or margin is not None:
                         all_peer_data.append({
                             "date": pd.Timestamp(d).strftime("%Y-%m-%d"),
                             "roe": roe,
-                            "margin": margin
+                            "margin": margin,
+                            "pe": pe,
+                            "pb": pb,
                         })
             except Exception as e:
                 logger.error("Failed historical data for peer %s: %s", ticker, e)
@@ -746,12 +932,10 @@ class DataCollector:
         
         industry_df = industry_df.rename(columns={
             "roe": "industry_roe",
-            "margin": "industry_margin"
+            "margin": "industry_margin",
+            "pe": "industry_pe",
+            "pb": "industry_pb",
         })
-
-        import numpy as np
-        industry_df["industry_pe"] = np.nan
-        industry_df["industry_pb"] = np.nan
         
         industry_df = industry_df.sort_values("date").reset_index(drop=True)
         df = self._validate_df(industry_df, "industry_df")
@@ -774,7 +958,7 @@ class DataCollector:
             try:
                 raw = yf.download(ticker, period=period, interval=interval,
                                   auto_adjust=True, progress=False)
-                if raw.empty:
+                if raw is None or raw.empty:
                     logger.warning("No intraday data for %s.", ticker)
                     continue
                 df = self._flatten(raw)

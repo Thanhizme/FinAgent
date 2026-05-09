@@ -20,6 +20,7 @@ matplotlib>=3.9.0          # Static chart rendering
 seaborn>=0.13.0            # Statistical visualisation (heatmap, KDE)
 plotly>=5.22.0             # Interactive charts
 kaleido>=0.2.1             # Static image export for Plotly figures
+streamlit>=1.36.0          # Lightweight web app UI for running pipeline and viewing charts
 
 # --- AI / LLM Integration ---
 google-generativeai>=0.7.0 # Google Gemini SDK (default provider)
