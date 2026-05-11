@@ -11,7 +11,7 @@ Exposes the four core pipeline modules:
 from .collector import DataCollector
 from .processor import DataProcessor
 from .visualizer import DataVisualizer
-from .ai_agent import AIAgent
+from .ai_agent import AnalysisAgent, AIAgent
 
-__all__ = ["DataCollector", "DataProcessor", "DataVisualizer", "AIAgent"]
+__all__ = ["DataCollector", "DataProcessor", "DataVisualizer", "AnalysisAgent", "AIAgent"]
 

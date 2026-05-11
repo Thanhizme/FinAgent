@@ -23,9 +23,7 @@ kaleido>=0.2.1             # Static image export for Plotly figures
 streamlit>=1.36.0          # Lightweight web app UI for running pipeline and viewing charts
 
 # --- AI / LLM Integration ---
-google-generativeai>=0.7.0 # Google Gemini SDK (default provider)
-anthropic>=0.28.0          # Anthropic Claude SDK
-openai>=1.35.0             # OpenAI GPT SDK
+google-genai>=1.20.0       # Google Gemini SDK (default provider)
 
 # --- Environment & Configuration ---
 python-dotenv>=1.0.1       # Load .env variables into os.environ
