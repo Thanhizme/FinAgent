@@ -1,6 +1,7 @@
 
 from __future__ import annotations
 
+import base64
 import subprocess
 import sys
 from datetime import date, timedelta
@@ -8,13 +9,26 @@ from pathlib import Path
 
 import pandas as pd
 import streamlit as st
-import streamlit.components.v1 as components
 
 from modules.visualizer import DataVisualizer
 
 APP_DIR = Path(__file__).resolve().parent
 PROCESSED_DIR = APP_DIR / "data" / "processed" / "processed_data"
 VIS_DIR = APP_DIR / "data" / "processed" / "visualization"
+
+PRESET_TICKERS = [
+    "AAPL", "MSFT", "MANH", "TER", "IDCC", "KLIC",
+    "JPM", "V", "SF", "JEF", "DFIN", "VBTX",
+    "AMGN", "ELV", "HALO", "EHC", "HIMS", "NSTG",
+    "AMZN", "TSLA", "DECK", "CROX", "CMG", "BOOT", "SONO",
+    "MDLZ", "KMB", "CASY", "CELH", "CALM", "JJSF",
+    "LMT", "GE", "DE", "UPS", "BYRN", "MLKN",
+    "XOM", "CVX", "OVV", "APA", "REPX", "PARR",
+    "D", "NEE", "VST", "NRG", "AWR", "AVA",
+    "PLD", "EQIX", "REXR", "OHI", "LGIH", "UTL",
+    "LIN", "SHW", "RS", "STLD", "MLI", "IOSP",
+    "GOOGL", "META", "PINS", "TTWO", "CNK", "YELP", "FOX",
+]
 
 def parse_tickers(raw: str) -> list[str]:
     parts = raw.replace(",", " ").split()
@@ -60,8 +74,15 @@ def load_fundamental_df(ticker: str) -> pd.DataFrame | None:
         return None
     return pd.read_csv(path)
 
+def load_benchmark_df() -> pd.DataFrame | None:
+    path = PROCESSED_DIR / "benchmark_processed.csv"
+    if not path.exists():
+        return None
+    return pd.read_csv(path)
+
 def available_tickers() -> list[str]:
     tickers = []
+    seen = set()
     if PROCESSED_DIR.exists():
         for path in PROCESSED_DIR.glob("*_processed.csv"):
             stem = path.stem
@@ -70,8 +91,44 @@ def available_tickers() -> list[str]:
             if stem in {"benchmark_processed", "industry_processed", "macro_processed", "news_processed"}:
                 continue
             ticker = stem.replace("_processed", "")
-            if ticker and ticker not in tickers:
-                tickers.append(ticker.upper())
+            upper = ticker.upper()
+            if ticker and upper not in seen:
+                tickers.append(upper)
+                seen.add(upper)
+
+    for ticker in PRESET_TICKERS:
+        upper = ticker.upper()
+        if upper not in seen:
+            tickers.append(upper)
+            seen.add(upper)
+
+    return sorted(tickers)
+
+def available_processed_tickers() -> list[str]:
+    tickers = []
+    seen = set()
+    if PROCESSED_DIR.exists():
+        for path in PROCESSED_DIR.glob("*_processed.csv"):
+            stem = path.stem
+            if stem.endswith("_fundamental_processed"):
+                continue
+            if stem in {"benchmark_processed", "industry_processed", "macro_processed", "news_processed"}:
+                continue
+            ticker = stem.replace("_processed", "").upper()
+            if ticker and ticker not in seen:
+                tickers.append(ticker)
+                seen.add(ticker)
+    return sorted(tickers)
+
+def available_fundamental_tickers() -> list[str]:
+    tickers = []
+    seen = set()
+    if PROCESSED_DIR.exists():
+        for path in PROCESSED_DIR.glob("*_fundamental_processed.csv"):
+            stem = path.stem.replace("_fundamental_processed", "").upper()
+            if stem and stem not in seen:
+                tickers.append(stem)
+                seen.add(stem)
     return sorted(tickers)
 
 def chart_files_for_ticker(ticker: str, timeframe: str) -> list[Path]:
@@ -141,7 +198,8 @@ def render_chart(path: Path, height: int = 980) -> None:
         st.warning(f"Chart not found: {path.name}")
         return
     html = path.read_text(encoding="utf-8")
-    components.html(html, height=height, scrolling=True)
+    encoded_html = base64.b64encode(html.encode("utf-8")).decode("ascii")
+    st.iframe(src=f"data:text/html;base64,{encoded_html}", height=height, width="stretch")
 
 def metric_value(df: pd.DataFrame, col: str, fmt: str = "{:.2f}") -> str:
     if col not in df.columns or df.empty:
@@ -190,8 +248,9 @@ with st.sidebar:
         selected_ticker = st.selectbox("Select ticker", existing_tickers, index=0)
         raw_tickers = selected_ticker
     else:
-        raw_tickers = st.text_input("Ticker(s) comma or space separated", value=st.session_state.get("last_manual_tickers", "TSLA"))
-        selected_ticker = parse_tickers(raw_tickers)[0] if parse_tickers(raw_tickers) else "TSLA"
+        raw_tickers = st.text_input("Ticker(s) comma or space separated", value=st.session_state.get("last_manual_tickers", "TSLA")) or ""
+        parsed_manual = parse_tickers(raw_tickers)
+        selected_ticker = parsed_manual[0] if parsed_manual else "TSLA"
 
     default_end = date.today() - timedelta(days=1)
     default_start = date.today() - timedelta(days=30 * 18)
@@ -209,10 +268,11 @@ with st.sidebar:
         _other_tickers if _other_tickers else ["—"],
         key="stock_b_selector",
     )
+    st.caption("Stock B will be collected and processed together with Stock A when you press Run.")
 
     col_a, col_b = st.columns(2)
-    run_clicked = col_a.button("Run", use_container_width=True)
-    refresh_clicked = col_b.button("Refresh Data", use_container_width=True)
+    run_clicked = col_a.button("Run", width="stretch")
+    refresh_clicked = col_b.button("Refresh Data", width="stretch")
 
 if "last_run_ok" not in st.session_state:
     st.session_state["last_run_ok"] = False
@@ -231,7 +291,10 @@ if refresh_clicked:
     run_clicked = True
 
 if run_clicked:
-    tickers = parse_tickers(raw_tickers)
+    tickers = parse_tickers(raw_tickers or "")
+    stock_b_for_run = (st.session_state.get("stock_b_selector") or "").strip().upper()
+    if stock_b_for_run and stock_b_for_run != "—" and stock_b_for_run not in tickers:
+        tickers.append(stock_b_for_run)
     if not tickers:
         st.error("Please enter at least one ticker.")
     elif start_date >= end_date:
@@ -263,6 +326,8 @@ if dashboard_ticker:
     price_df = load_price_df(dashboard_ticker)
     if price_df is None:
         st.warning(f"No processed price file found for {dashboard_ticker}.")
+        st.markdown(f"### Comparison — {dashboard_ticker} vs {st.session_state.get('stock_b_selector', 'Stock B')}")
+        st.info("Comparison is unavailable because Stock A has no processed data yet. Pick a ticker with processed data or press Run.")
     else:
         latest = price_df.tail(1).iloc[0]
         prev = price_df.tail(2).iloc[0] if len(price_df) > 1 else latest
@@ -325,20 +390,48 @@ if dashboard_ticker:
                     s6.metric("VaR 99%", f"{q99:.3%}")
 
         with cmp_tab:
-            st.markdown("### Comparison — Stock A vs Stock B")
-            st.caption(
-                f"**Stock A** = {dashboard_ticker} &nbsp;|&nbsp; "
-                "Select **Stock B** below to compare metrics and the Efficient Frontier."
-            )
+            st.markdown(f"### Comparison — {dashboard_ticker} vs {st.session_state.get('stock_b_selector', 'Stock B')}")
 
             stock_b = st.session_state.get("stock_b_selector", "")
-            other_tickers = [t for t in available_tickers() if t != dashboard_ticker]
-            if not other_tickers or not stock_b or stock_b == "—":
-                st.warning("No other tickers available. Run the pipeline for at least one additional ticker.")
+            if not stock_b or stock_b == "—":
+                st.warning("Please choose Stock B from the sidebar.")
             else:
                 price_b = load_price_df(stock_b)
                 fund_a = load_fundamental_df(dashboard_ticker)
                 fund_b = load_fundamental_df(stock_b)
+                benchmark_df = load_benchmark_df()
+
+                missing_for_pair = []
+                if price_b is None or price_b.empty:
+                    missing_for_pair.append(stock_b)
+                if fund_a is None or fund_a.empty:
+                    missing_for_pair.append(dashboard_ticker)
+                if fund_b is None or fund_b.empty:
+                    missing_for_pair.append(stock_b)
+
+                if missing_for_pair:
+                    st.info(
+                        "Missing comparison data for: "
+                        + ", ".join(sorted(set(missing_for_pair)))
+                        + ". Press Run to collect and process Stock A + Stock B together."
+                    )
+
+                st.markdown("#### Performance Chart")
+                perf_data = {dashboard_ticker: price_df}
+                if price_b is not None:
+                    perf_data[stock_b] = price_b
+                perf_visualizer = DataVisualizer(perf_data)
+                perf_fig = perf_visualizer.performance_comparison_chart(
+                    ticker_a=dashboard_ticker,
+                    ticker_b=stock_b,
+                    benchmark_df=benchmark_df,
+                    benchmark_label="VNI",
+                    save=True,
+                )
+                if perf_fig is not None:
+                    st.plotly_chart(perf_fig, width="stretch")
+                else:
+                    st.warning("Not enough data to build performance chart for Stock A, Stock B, and VNI.")
 
                 def _last_val(df, col, pct=False, dollar=False):
                     if df is None or df.empty or col not in df.columns:
@@ -399,18 +492,33 @@ if dashboard_ticker:
                 with col_left:
                     st.markdown("#### Company Financial Health")
                     h_df = pd.DataFrame(health_rows, columns=["Metric", dashboard_ticker, stock_b])
-                    st.dataframe(h_df.set_index("Metric"), use_container_width=True)
+                    st.dataframe(h_df.set_index("Metric"), width="stretch")
 
                     st.markdown("#### Fundamental Valuation")
                     f_df = pd.DataFrame(fund_rows, columns=["Metric", dashboard_ticker, stock_b])
-                    st.dataframe(f_df.set_index("Metric"), use_container_width=True)
+                    st.dataframe(f_df.set_index("Metric"), width="stretch")
 
                 with col_right:
                     st.markdown("#### Technical Valuation")
                     t_df = pd.DataFrame(tech_rows, columns=["Metric", dashboard_ticker, stock_b])
-                    st.dataframe(t_df.set_index("Metric"), use_container_width=True)
+                    st.dataframe(t_df.set_index("Metric"), width="stretch")
 
                 st.markdown("#### Visual Comparison")
+                vc_col1, vc_col2 = st.columns(2)
+                use_log_scale_cmp = vc_col1.checkbox(
+                    "Log scale Y-axis (positive-only panels)",
+                    value=False,
+                    key=f"cmp_log_scale_{dashboard_ticker}_{stock_b}",
+                )
+                clip_threshold_cmp = vc_col2.number_input(
+                    "Clip threshold (0 = off)",
+                    min_value=0.0,
+                    value=50.0,
+                    step=5.0,
+                    key=f"cmp_clip_threshold_{dashboard_ticker}_{stock_b}",
+                )
+                st.caption("Bars above threshold are clipped and labeled like 50+ to keep smaller metrics readable.")
+
                 all_price_data = {}
                 for t in available_tickers():
                     df_t = load_price_df(t)
@@ -427,14 +535,15 @@ if dashboard_ticker:
                         ticker_b=stock_b,
                         fund_a=fund_a,
                         fund_b=fund_b,
+                        clip_threshold=clip_threshold_cmp if clip_threshold_cmp > 0 else None,
+                        use_log_scale=use_log_scale_cmp,
                         save=True,
                     )
-                    st.plotly_chart(cmp_fig, use_container_width=True)
+                    st.plotly_chart(cmp_fig, width="stretch")
                 except Exception as exc:
                     st.warning(f"Could not render comparison bar chart: {exc}")
 
                 st.markdown("#### Efficient Frontier")
-                st.caption("Y-axis: Annualised Return &nbsp;|&nbsp; X-axis: Annualised Volatility (Risk)")
                 try:
                     ef_visualizer = DataVisualizer(all_price_data)
                     ef_fig = ef_visualizer.efficient_frontier_chart(
@@ -442,26 +551,26 @@ if dashboard_ticker:
                         ticker_b=stock_b,
                         save=True,
                     )
-                    st.plotly_chart(ef_fig, use_container_width=True)
+                    st.plotly_chart(ef_fig, width="stretch")
                 except Exception as exc:
                     st.warning(f"Could not render efficient frontier: {exc}")
 
         left, right = st.columns([1.35, 1])
         with left:
             st.markdown("### Recent rows")
-            st.dataframe(price_df.tail(25), use_container_width=True, height=420)
+            st.dataframe(price_df.tail(25), width="stretch", height=420)
 
         with right:
             st.markdown("### Fundamentals")
             fund_df = load_fundamental_df(dashboard_ticker)
             if fund_df is not None and not fund_df.empty:
-                st.dataframe(fund_df, use_container_width=True, height=420)
+                st.dataframe(fund_df, width="stretch", height=420)
             else:
                 st.info("No fundamental file found for this ticker.")
 
         st.markdown("### Data snapshot")
         summary_cols = [c for c in ["date", "open", "high", "low", "close", "volume", "daily_return", "rsi_14", "macd_line", "beta", "sharpe_ratio"] if c in price_df.columns]
-        st.dataframe(price_df[summary_cols].tail(10), use_container_width=True)
+        st.dataframe(price_df[summary_cols].tail(10), width="stretch")
 else:
     st.info("Choose a ticker from the sidebar and press Run to load the dashboard.")
 

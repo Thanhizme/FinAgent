@@ -131,12 +131,6 @@ class DataVisualizer:
         html_path = self.output_dir / f"{filename_stub}.html"
         fig.write_html(str(html_path), include_plotlyjs="cdn", full_html=True)
 
-        try:
-            png_path = self.output_dir / f"{filename_stub}.png"
-            fig.write_image(str(png_path), scale=2)
-        except Exception as exc:
-            logger.info("PNG export skipped for %s (%s)", filename_stub, exc)
-
     def price_trend_chart(
         self,
         ticker: str,
@@ -963,6 +957,8 @@ class DataVisualizer:
         ticker_b: str,
         fund_a: Optional[pd.DataFrame] = None,
         fund_b: Optional[pd.DataFrame] = None,
+        clip_threshold: Optional[float] = 50.0,
+        use_log_scale: bool = False,
         save: bool = True,
     ) -> go.Figure:
         """
@@ -975,6 +971,12 @@ class DataVisualizer:
             The two tickers to compare.
         fund_a, fund_b : pd.DataFrame, optional
             Latest-row fundamental data for each ticker (already loaded by caller).
+        clip_threshold : float, optional
+            Absolute cap for display values. Any value with |x| > clip_threshold will
+            be clipped on chart height and labeled as "{threshold}+" or "-{threshold}+".
+            Set to None or <= 0 to disable clipping.
+        use_log_scale : bool
+            If True, use log scale for Y-axis on subplots where all displayed values are positive.
         save : bool
             Whether to save the figure to output_dir.
         """
@@ -994,6 +996,13 @@ class DataVisualizer:
                 return None
             vals = pd.to_numeric(df[col], errors="coerce").dropna()
             return float(vals.iloc[-1]) if not vals.empty else None
+
+        def _clip_for_display(value: float) -> float:
+            if clip_threshold is None or clip_threshold <= 0:
+                return value
+            if abs(value) > float(clip_threshold):
+                return float(clip_threshold) if value > 0 else -float(clip_threshold)
+            return value
 
         health_metrics = {
             "ROE (%)": (
@@ -1094,8 +1103,13 @@ class DataVisualizer:
 
         for col_idx, (_, metrics) in enumerate(categories, start=1):
             labels = list(metrics.keys())
-            vals_a = [metrics[k][0] for k in labels]
-            vals_b = [metrics[k][1] for k in labels]
+            vals_a_raw = [float(metrics[k][0]) for k in labels]
+            vals_b_raw = [float(metrics[k][1]) for k in labels]
+
+            vals_a = [_clip_for_display(v) for v in vals_a_raw]
+            vals_b = [_clip_for_display(v) for v in vals_b_raw]
+            text_a = [f"{v:.2f}" for v in vals_a_raw]
+            text_b = [f"{v:.2f}" for v in vals_b_raw]
 
             show_legend = col_idx == 1
             fig.add_trace(
@@ -1104,9 +1118,11 @@ class DataVisualizer:
                     x=labels,
                     y=vals_a,
                     marker_color=color_a,
-                    text=[f"{v:.2f}" for v in vals_a],
+                    text=text_a,
                     textposition="outside",
                     textfont=dict(size=10),
+                    customdata=[[v] for v in vals_a_raw],
+                    hovertemplate="<b>%{x}</b><br>Displayed: %{y:.2f}<br>Original: %{customdata[0]:.2f}<extra></extra>",
                     showlegend=show_legend,
                     legendgroup="a",
                 ),
@@ -1119,9 +1135,11 @@ class DataVisualizer:
                     x=labels,
                     y=vals_b,
                     marker_color=color_b,
-                    text=[f"{v:.2f}" for v in vals_b],
+                    text=text_b,
                     textposition="outside",
                     textfont=dict(size=10),
+                    customdata=[[v] for v in vals_b_raw],
+                    hovertemplate="<b>%{x}</b><br>Displayed: %{y:.2f}<br>Original: %{customdata[0]:.2f}<extra></extra>",
                     showlegend=show_legend,
                     legendgroup="b",
                 ),
@@ -1129,9 +1147,15 @@ class DataVisualizer:
                 col=col_idx,
             )
 
+            panel_vals = vals_a + vals_b
+            if use_log_scale and panel_vals and min(panel_vals) > 0:
+                fig.update_yaxes(type="log", row=1, col=col_idx)
+            else:
+                fig.update_yaxes(type="linear", row=1, col=col_idx)
+
         fig.update_layout(
             title=dict(
-                text=f"Comparison: {ticker_a} (Stock A) vs {ticker_b} (Stock B)",
+                text=f"Comparison: {ticker_a} vs {ticker_b}",
                 x=0.02,
                 xanchor="left",
             ),
@@ -1167,6 +1191,107 @@ class DataVisualizer:
         stub = f"comparison_{ticker_a.lower()}_vs_{ticker_b.lower()}"
         self._save_figure(fig, stub, save)
         logger.info("Saved comparison chart -> %s", self.output_dir / f"{stub}.html")
+        return fig
+
+    def performance_comparison_chart(
+        self,
+        ticker_a: str,
+        ticker_b: str,
+        benchmark_df: Optional[pd.DataFrame] = None,
+        benchmark_label: str = "VNI",
+        save: bool = True,
+    ) -> Optional[go.Figure]:
+        def _series_from_ticker(ticker: str) -> Optional[pd.DataFrame]:
+            if ticker not in self.data:
+                return None
+            try:
+                frame = self._get_ticker_frame(ticker)
+            except Exception:
+                return None
+            return _series_from_frame(frame, ticker)
+
+        def _series_from_frame(frame: Optional[pd.DataFrame], label: str) -> Optional[pd.DataFrame]:
+            if frame is None or frame.empty or "date" not in frame.columns:
+                return None
+
+            work = frame.copy()
+            work["date"] = pd.to_datetime(work["date"], errors="coerce")
+            work = work.dropna(subset=["date"]).sort_values("date")
+            if work.empty:
+                return None
+
+            if "daily_return" in work.columns:
+                returns = pd.to_numeric(work["daily_return"], errors="coerce")
+            elif "close" in work.columns:
+                close = pd.to_numeric(work["close"], errors="coerce")
+                returns = close.pct_change()
+            else:
+                return None
+
+            out = pd.DataFrame({"date": work["date"], "ret": returns})
+            out["ret"] = out["ret"].fillna(0.0)
+            out[label] = (1.0 + out["ret"]).cumprod() - 1.0
+            return out[["date", label]]
+
+        s_a = _series_from_ticker(ticker_a)
+        s_b = _series_from_ticker(ticker_b)
+        s_benchmark = _series_from_frame(benchmark_df, benchmark_label)
+
+        series = [s for s in [s_a, s_b, s_benchmark] if s is not None]
+        if len(series) < 2:
+            return None
+
+        merged = series[0]
+        for s in series[1:]:
+            merged = merged.merge(s, on="date", how="inner")
+        if merged.empty:
+            return None
+
+        fig = go.Figure()
+        palette = {
+            ticker_a: "#1d4ed8",
+            ticker_b: "#ef4444",
+            benchmark_label: "#14b8a6",
+        }
+
+        for col in [c for c in merged.columns if c != "date"]:
+            fig.add_trace(
+                go.Scatter(
+                    x=merged["date"],
+                    y=merged[col] * 100,
+                    mode="lines",
+                    name=col,
+                    line=dict(width=2.8, color=palette.get(col, "#94a3b8")),
+                    hovertemplate="%{x|%Y-%m-%d}<br>%{fullData.name}: %{y:.2f}%<extra></extra>",
+                )
+            )
+
+        fig.add_hline(y=0, line_width=1, line_dash="solid", line_color="rgba(148,163,184,0.5)")
+        fig.update_layout(
+            title=dict(
+                text=f"Performance Chart: {ticker_a} vs {ticker_b} vs {benchmark_label}",
+                x=0.02,
+                xanchor="left",
+            ),
+            template="plotly_dark",
+            paper_bgcolor="#0b1220",
+            plot_bgcolor="#0f172a",
+            font=dict(color="#e2e8f0", size=12),
+            height=520,
+            margin=dict(l=55, r=20, t=70, b=45),
+            legend=dict(orientation="h", yanchor="bottom", y=1.01, xanchor="left", x=0),
+            xaxis=dict(title=None, showgrid=False),
+            yaxis=dict(
+                title="Return (%)",
+                ticksuffix="%",
+                showgrid=True,
+                gridcolor="rgba(148,163,184,0.12)",
+            ),
+        )
+
+        stub = f"performance_{ticker_a.lower()}_vs_{ticker_b.lower()}"
+        self._save_figure(fig, stub, save)
+        logger.info("Saved performance chart -> %s", self.output_dir / f"{stub}.html")
         return fig
 
     def efficient_frontier_chart(
@@ -1287,8 +1412,8 @@ class DataVisualizer:
                     textposition="top right",
                     textfont=dict(size=13, color="#38bdf8"),
                     marker=dict(size=16, color="#38bdf8", symbol="star", line=dict(color="#0ea5e9", width=1.5)),
-                    name=f"{ticker_a} (Stock A)",
-                    hovertemplate=f"<b>{ticker_a} (A)</b><br>Volatility: %{{x:.1%}}<br>Return: %{{y:.1%}}<extra></extra>",
+                    name=f"{ticker_a}",
+                    hovertemplate=f"<b>{ticker_a}</b><br>Volatility: %{{x:.1%}}<br>Return: %{{y:.1%}}<extra></extra>",
                 )
             )
 
@@ -1302,8 +1427,8 @@ class DataVisualizer:
                     textposition="top right",
                     textfont=dict(size=13, color="#f97316"),
                     marker=dict(size=16, color="#f97316", symbol="circle", line=dict(color="#ea580c", width=1.5)),
-                    name=f"{ticker_b} (Stock B)",
-                    hovertemplate=f"<b>{ticker_b} (B)</b><br>Volatility: %{{x:.1%}}<br>Return: %{{y:.1%}}<extra></extra>",
+                    name=f"{ticker_b}",
+                    hovertemplate=f"<b>{ticker_b}</b><br>Volatility: %{{x:.1%}}<br>Return: %{{y:.1%}}<extra></extra>",
                 )
             )
 
