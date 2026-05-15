@@ -548,50 +548,6 @@ class DataCollector:
             logger.error("Official VNINDEX fetch failed (vnstock:VCI): %s", e)
             return pd.DataFrame()
 
-    def _fetch_vn_price_official(self, ticker: str) -> pd.DataFrame:
-        """Fetch VN ticker EOD from vnstock (VCI source) as a price fallback."""
-        if VnQuote is None:
-            logger.warning("vnstock not available; skip official price fetch for %s.", ticker)
-            return pd.DataFrame()
-
-        try:
-            quote = VnQuote(symbol=ticker, source="VCI")
-            raw = quote.history(start=self.start_date, end=self.end_date, interval="1D")
-            if raw is None or raw.empty:
-                return pd.DataFrame()
-
-            df = raw.copy()
-            rename_map = {"time": "date", "tradingDate": "date"}
-            df = df.rename(columns=rename_map)
-            if "date" not in df.columns:
-                return pd.DataFrame()
-
-            keep_cols = ["date", "open", "high", "low", "close", "volume"]
-            df = df[[c for c in keep_cols if c in df.columns]].copy()
-            df["date"] = pd.to_datetime(df["date"], errors="coerce")
-            start_ts = pd.to_datetime(self.start_date, errors="coerce")
-            end_ts = pd.to_datetime(self.end_date, errors="coerce")
-            if pd.notna(start_ts):
-                df = df[df["date"] >= start_ts]
-            if pd.notna(end_ts):
-                df = df[df["date"] <= end_ts]
-
-            df = df.dropna(subset=["date", "close"]).sort_values("date").reset_index(drop=True)
-            df.insert(1, "ticker", ticker)
-            df["adj_close"] = df["close"]
-            cols = ["date", "ticker", "open", "high", "low", "close", "adj_close", "volume"]
-            df = df[[c for c in cols if c in df.columns]].sort_values("date").reset_index(drop=True)
-            df = self._validate_df(df, f"{ticker}_price_vnstock")
-            if df.empty:
-                return df
-
-            self._save_csv(df, f"{ticker}_prices.csv")
-            logger.info("Fetched %d rows for %s from vnstock price fallback.", len(df), ticker)
-            return df
-        except Exception as e:
-            logger.error("vnstock price fetch failed for %s: %s", ticker, e)
-            return pd.DataFrame()
-
     def _get_news_search_terms(self, ticker: str) -> list[str]:
         ticker = ticker.upper()
         terms = [ticker]
@@ -723,25 +679,12 @@ class DataCollector:
                         self._save_csv(df, f"{ticker}_prices.csv")
                         logger.info("Fetched %d rows for %s.", len(df), ticker)
                     else:
-                        if ticker in self._VN_TICKERS:
-                            logger.warning("No yfinance price data for %s. Trying vnstock fallback ...", ticker)
-                            vn_df = self._fetch_vn_price_official(ticker)
-                            if vn_df is not None and not vn_df.empty:
-                                data_map[ticker] = vn_df
-                            else:
-                                logger.warning("No price data for %s after vnstock fallback.", ticker)
-                        else:
-                            logger.warning("No price data for %s.", ticker)
+                        logger.warning("No price data for %s.", ticker)
                     break
                 except Exception as e:
                     logger.error("Attempt %d/3 failed for %s: %s", attempt, ticker, e)
                     if attempt < 3:
                         time.sleep(3)
-                    elif ticker in self._VN_TICKERS:
-                        logger.warning("yfinance failed for %s after retries. Trying vnstock fallback ...", ticker)
-                        vn_df = self._fetch_vn_price_official(ticker)
-                        if vn_df is not None and not vn_df.empty:
-                            data_map[ticker] = vn_df
         return data_map
 
     def fetch_benchmark(self):
@@ -1125,17 +1068,13 @@ class DataCollector:
             
             rev = _v(_row(income, "Total Revenue"))
             net_inc = _v(_row(income, "Net Income"))
-            ebit = _v(_row(income, "EBIT", "Operating Income", "Total Operating Income As Reported"))
-            pretax_income = _v(_row(income, "Pretax Income", "Income Before Tax"))
             assets = _v(_row(balance, "Total Assets"))
             equity = _v(_row(balance, "Stockholders Equity", "Common Stock Equity"))
             debt = _v(_row(balance, "Total Debt"))
             current_assets = _v(_row(balance, "Current Assets"))
             current_liabilities = _v(_row(balance, "Current Liabilities"))
             retained_earnings = _v(_row(balance, "Retained Earnings"))
-            interest_expense = _v(_row(income, "Interest Expense", "Interest Expenses", "Interest Expense And Other"))
-            if interest_expense is None and ebit is not None and pretax_income is not None:
-                interest_expense = abs(ebit - pretax_income)
+            interest_expense = _v(_row(income, "Interest Expense"))
             ebitda = _v(_row(income, "EBITDA"))
             
             if rev is None and net_inc is None and assets is None and equity is None:
