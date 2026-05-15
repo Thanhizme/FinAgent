@@ -198,7 +198,7 @@ everything to `data/raw/` as CSV files.
 | Method                         | Output file                | Description                                               |
 | ------------------------------ | -------------------------- | --------------------------------------------------------- |
 | `fetch_stock_prices()`         | `<TICKER>_prices.csv`      | OHLCV daily history via yfinance                          |
-| `fetch_benchmark()`            | `benchmark_<SYMBOL>.csv`   | Benchmark index (default: `^GSPC`) via yfinance           |
+| `fetch_benchmark()`            | `benchmark_<SYMBOL>.csv`   | Benchmark index: VN uses official `VNINDEX` via vnstock (VCI) with yfinance/proxy fallback; Global uses `^GSPC` |
 | `fetch_peers(peers)`           | `peer_<TICKER>.csv`        | Peer tickers matched by sector and market-cap             |
 | `fetch_financial_statements()` | `<TICKER>_fundamental.csv` | Quarterly income statement, balance sheet, cash flow      |
 | `fetch_macro_indicators()`     | `macro_indicators.csv`     | FRED rates/CPI + yfinance commodities/FX in wide format   |
@@ -338,7 +338,7 @@ the following files for each run:
 | `<TICKER>_processed.csv`             | Price + full indicator set per ticker         | `date`, `ticker`, `open`, `high`, `low`, `close`, `adj_close`, `volume`, `daily_return`, `log_return`, `ma7`…`ma200`, `ema12`, `ema26`, `rsi_14`, `macd_line`, `macd_signal`, `macd_hist`, `bb_upper`, `bb_middle`, `bb_lower`, `atr_14`, `volatility_20`, `volatility_60`, `drawdown`, `sharpe_ratio`, `beta`, `relative_strength`, `cum_return_ytd`, `is_outlier` |
 | `benchmark_processed.csv`            | Same pipeline applied to the benchmark index  | Same schema minus `atr_14` (always NaN for index data, auto-dropped)                                                                                                                                                                                                                                                                                                |
 | `<TICKER>_fundamental_processed.csv` | Cleaned quarterly fundamental data            | `date`, `ticker`, `revenue`, `gross_profit`, `operating_profit`, `net_income`, `eps`, `total_assets`, `total_liabilities`, `equity`, `total_debt`, `cash`, `operating_cash_flow`, `roe`, `roa`, `margin`, `debt_to_equity`, `shares_outstanding`, `bvps`, `dividend` (all-null columns auto-dropped)                                                                |
-| `macro_processed.csv`                | Wide-format macro indicators, daily frequency | `date`, `fed_funds_rate`, `us_10y_yield`, `us_cpi`, `dxy`, `gold_price`, `oil_price`                                                                                                                                                                                                                                                                                |
+| `macro_processed.csv`                | Wide-format macro indicators, daily frequency | `date`, `fed_funds_rate`, `us_10y_yield`, `us_cpi`, `dxy`, `gold_price`, `oil_price`, `gdp`, `unemployment_rate`, `domestic_interest_rate`, `fx_rate`, `fdi_inflow`                                                                                                                                                                                                 |
 | `industry_processed.csv`             | Peer-averaged fundamental metrics             | `date`, `industry_roe`, `industry_margin` (all-null columns auto-dropped)                                                                                                                                                                                                                                                                                           |
 | `news_processed.csv`                 | Daily aggregated news sentiment per ticker    | `date`, `ticker`, `article_count`, `headline`, `summary`, `source`, `sentiment`, `sentiment_score`, `positive_count`, `neutral_count`, `negative_count`, `event_type`                                                                                                                                                                                               |
 
@@ -348,6 +348,7 @@ the following files for each run:
 
 | Source        | Library / API   | Data Type                                    | Free Tier           |
 | ------------- | --------------- | -------------------------------------------- | ------------------- |
+| vnstock (VCI) | vnstock API     | Official VNINDEX EOD benchmark (VN market)  | Public access       |
 | Yahoo Finance | yfinance        | Stock prices, benchmark, peers, fundamentals | No API key required |
 | NewsAPI       | REST API        | Financial news articles                      | 100 requests/day    |
 | FRED          | REST API (HTTP) | Fed funds rate, 10Y yield, CPI               | Free with API key   |

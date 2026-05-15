@@ -3,6 +3,7 @@ import argparse
 import logging
 import sys
 from datetime import datetime, timedelta
+from pathlib import Path
 
 import pandas as pd
 from dateutil.relativedelta import relativedelta
@@ -33,6 +34,22 @@ SUGGESTED_TICKERS = [
     "AAPL", "MSFT", "GOOGL", "AMZN", "TSLA", "V", "JPM", "META",
     "FPT", "VCB", "VHM", "HPG",
 ]
+
+
+def _infer_market_from_tickers(tickers: list[str]) -> str:
+    """Infer market scope for benchmark selection.
+
+    Returns "VN" only when all input tickers are VN tickers.
+    Otherwise defaults to "GLOBAL".
+    """
+    if not tickers:
+        return "GLOBAL"
+
+    vn_set = getattr(DataCollector, "_VN_TICKERS", set())
+    normalized = [(t or "").strip().upper() for t in tickers]
+    if normalized and all(t in vn_set for t in normalized):
+        return "VN"
+    return "GLOBAL"
 
 def _parse_ticker_input(raw_value: str) -> list[str]:
     parts = raw_value.replace(",", " ").split()
@@ -128,7 +145,8 @@ def build_parser() -> argparse.ArgumentParser:
 
 def run_collection(tickers: list[str], start: str, end: str) -> dict:
     logger.info("Stage 1: Data Collection")
-    collector = DataCollector(tickers=tickers, start_date=start, end_date=end)
+    market = _infer_market_from_tickers(tickers)
+    collector = DataCollector(tickers=tickers, start_date=start, end_date=end, market=market)
 
     raw_data = {
         "prices"      : collector.fetch_stock_prices(),
@@ -156,6 +174,11 @@ def build_processors(raw_data: dict) -> dict:
     if bm_df is not None and not bm_df.empty:
         logger.info("  Processing benchmark")
         processed["benchmark"] = DataProcessor(df=bm_df, ticker="benchmark").run_pipeline()
+    else:
+        logger.warning("  Benchmark data unavailable; writing empty benchmark_processed.csv to avoid stale reuse")
+        processed["benchmark"] = pd.DataFrame(columns=["date", "ticker", "close", "volume"])
+        benchmark_path = Path(__file__).resolve().parent / "data" / "processed" / "processed_data" / "benchmark_processed.csv"
+        processed["benchmark"].to_csv(benchmark_path, index=False)
 
     processed["peers"] = {}
     for ticker, df in raw_data.get("peers", {}).items():
@@ -188,7 +211,10 @@ def build_processors(raw_data: dict) -> dict:
             p.normalise_types()
             p.remove_duplicates()
             p.handle_missing_values(strategy="ffill")
-            p.engineer_fundamental_features(news_df=processed.get("news"))
+            p.engineer_fundamental_features(
+                news_df=processed.get("news"),
+                industry_df=raw_data.get("industry"),
+            )
             processed["fundamental"][ticker] = p.df
             p._save_csv(filename=f"{ticker}_fundamental_processed.csv")
 
@@ -220,6 +246,11 @@ def run_processing(raw_data: dict) -> dict:
 
     processed_data = build_processors(raw_data)
     benchmark_df = processed_data.get("benchmark")
+    has_benchmark = (
+        benchmark_df is not None
+        and not benchmark_df.empty
+        and "daily_return" in benchmark_df.columns
+    )
     peer_frames = processed_data.get("peers", {})
     price_frames = processed_data.get("prices", {})
 
@@ -227,7 +258,7 @@ def run_processing(raw_data: dict) -> dict:
         processor = DataProcessor(df=df, ticker=ticker)
         processor.df = df.copy()
 
-        if benchmark_df is not None:
+        if has_benchmark:
             processor.calc_beta(benchmark_df)
             processor.calc_relative_strength(benchmark_df)
 
@@ -239,20 +270,39 @@ def run_processing(raw_data: dict) -> dict:
 
     for ticker, df in price_frames.items():
         comparison_frames = []
-        if benchmark_df is not None:
+        if has_benchmark:
             comparison_frames.append(benchmark_df)
         comparison_frames.extend(other_df for other_ticker, other_df in peer_frames.items() if other_ticker != ticker)
         enrich_and_save("prices", ticker, df, comparison_frames)
 
+        # DCF: compute intrinsic price using beta and latest close from price pipeline
+        fund_df = processed_data.get("fundamental", {}).get(ticker)
+        if fund_df is not None and not fund_df.empty:
+            price_df_enriched = processed_data["prices"].get(ticker)
+            beta_val: float | None = None
+            latest_close: float | None = None
+            if price_df_enriched is not None:
+                beta_series = price_df_enriched.get("beta", pd.Series(dtype=float))
+                if isinstance(beta_series, pd.Series) and not beta_series.dropna().empty:
+                    beta_val = float(beta_series.dropna().iloc[-1])
+                close_series = price_df_enriched.get("close", pd.Series(dtype=float))
+                if isinstance(close_series, pd.Series) and not close_series.dropna().empty:
+                    latest_close = float(close_series.dropna().iloc[-1])
+            fund_proc = DataProcessor(df=fund_df, ticker=ticker)
+            fund_proc.calc_dcf_valuation(beta=beta_val, current_price=latest_close)
+            processed_data["fundamental"][ticker] = fund_proc.df
+            fund_proc._save_csv(filename=f"{ticker}_fundamental_processed.csv")
+
     for ticker, df in peer_frames.items():
         comparison_frames = []
-        if benchmark_df is not None:
+        if has_benchmark:
             comparison_frames.append(benchmark_df)
         comparison_frames.extend(other_df for other_ticker, other_df in peer_frames.items() if other_ticker != ticker)
         comparison_frames.extend(other_df for other_ticker, other_df in price_frames.items() if other_ticker != ticker)
         enrich_and_save("peers", ticker, df, comparison_frames)
 
-    if benchmark_df is not None:
+    if has_benchmark:
+        assert benchmark_df is not None
         benchmark_processor = DataProcessor(df=benchmark_df, ticker="benchmark")
         benchmark_processor.df = benchmark_df.copy()
         benchmark_processor.df["beta"] = 1.0

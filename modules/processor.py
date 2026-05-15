@@ -155,12 +155,16 @@ class DataProcessor:
         self.df['ma30'] = self.df['close'].rolling(window=30).mean()
         self.df['ma50'] = self.df['close'].rolling(window=50).mean()
         self.df['ma200'] = self.df['close'].rolling(window=200).mean()
-        logger.info(f"[{self.ticker}] calc_moving_averages done | ma7, ma20, ma30, ma50, ma200 added")
+        self.df['ma20_signal'] = np.where(self.df['close'] > self.df['ma20'], 'BUY', 'SELL')
+        self.df['ma50_signal'] = np.where(self.df['close'] > self.df['ma50'], 'BUY', 'SELL')
+        self.df['ma200_signal'] = np.where(self.df['close'] > self.df['ma200'], 'BUY', 'SELL')
+        logger.info(f"[{self.ticker}] calc_moving_averages done | ma7, ma20, ma30, ma50, ma200 and BUY/SELL signals added")
         return self
 
     def calc_volatility(self) -> "DataProcessor":
-        self.df['volatility_20'] = self.df['daily_return'].rolling(window=20).std()
+        self.df['volatility_30'] = self.df['daily_return'].rolling(window=30).std()
         self.df['volatility_60'] = self.df['daily_return'].rolling(window=60).std()
+        logger.info("[%s] calc_volatility done | volatility_30, volatility_60 added", self.ticker)
         return self
 
     def calc_bollinger_bands(self) -> "DataProcessor":
@@ -299,6 +303,54 @@ class DataProcessor:
         )
         return self
 
+    def calc_price_volume_anomalies(self) -> "DataProcessor":
+        if 'volume' in self.df.columns:
+            rolling_vol_avg = self.df['volume'].rolling(window=20).mean()
+            self.df['volume_spike'] = (self.df['volume'] > 2 * rolling_vol_avg).fillna(False)
+        else:
+            self.df['volume_spike'] = False
+
+        if all(c in self.df.columns for c in ['open', 'high', 'low']):
+            prev_high = self.df['high'].shift(1)
+            prev_low = self.df['low'].shift(1)
+            self.df['gap_up'] = (self.df['open'] > prev_high).fillna(False)
+            self.df['gap_down'] = (self.df['open'] < prev_low).fillna(False)
+        else:
+            self.df['gap_up'] = False
+            self.df['gap_down'] = False
+
+        if 'daily_return' in self.df.columns:
+            rolling_std = self.df['daily_return'].rolling(window=20).std()
+            self.df['sudden_price_movement'] = (
+                self.df['daily_return'].abs() > 3 * rolling_std
+            ).fillna(False)
+        else:
+            self.df['sudden_price_movement'] = False
+
+        logger.info(
+            "[%s] calc_price_volume_anomalies done | volume_spike, gap_up, gap_down, sudden_price_movement",
+            self.ticker,
+        )
+        return self
+
+    def calc_var(self, window: int = 252) -> "DataProcessor":
+        if 'daily_return' not in self.df.columns:
+            self.df['var_95'] = np.nan
+            self.df['var_99'] = np.nan
+            return self
+        self.df['var_95'] = (
+            self.df['daily_return']
+            .rolling(window=window, min_periods=window)
+            .quantile(0.05)
+        )
+        self.df['var_99'] = (
+            self.df['daily_return']
+            .rolling(window=window, min_periods=window)
+            .quantile(0.01)
+        )
+        logger.info("[%s] calc_var done | var_95, var_99 added", self.ticker)
+        return self
+
     def calc_beta(self, benchmark_df, window: int = ROLLING_BETA_WINDOW) -> "DataProcessor":
         if 'daily_return' not in self.df.columns:
             raise RuntimeError(f"calc_returns() must be called before calc_beta()")
@@ -435,7 +487,11 @@ class DataProcessor:
         )
         return self
 
-    def engineer_fundamental_features(self, news_df: pd.DataFrame | None = None) -> "DataProcessor":
+    def engineer_fundamental_features(
+        self,
+        news_df: pd.DataFrame | None = None,
+        industry_df: pd.DataFrame | None = None,
+    ) -> "DataProcessor":
         numeric_candidates = [
             'revenue', 'operating_profit', 'total_assets', 'total_liabilities',
             'total_debt', 'cash', 'interest_expense', 'ebitda', 'current_assets',
@@ -646,9 +702,6 @@ class DataProcessor:
         x5 = np.where(pd.notna(total_assets) & (total_assets != 0), sales / total_assets, np.nan)
         self.df['altman_z_score'] = 1.2 * x1 + 1.4 * x2 + 3.3 * x3 + 0.6 * x4 + 1.0 * x5
 
-        self.df['latest_event_type'] = pd.NA
-        self.df['latest_sentiment'] = pd.NA
-        self.df['news_article_count'] = 0
         if news_df is not None and not news_df.empty and {'date', 'ticker'}.issubset(news_df.columns):
             tmp = news_df.copy()
             tmp['date'] = pd.to_datetime(tmp['date'], errors='coerce')
@@ -663,28 +716,215 @@ class DataProcessor:
                     news_article_count=('article_count', 'sum'),
                 )
             )
-            merged = pd.merge(
-                self.df,
-                grouped,
-                on=['date', 'ticker'],
-                how='left',
-                suffixes=('', '_news'),
-            )
-            for col in ['latest_event_type', 'latest_sentiment']:
-                news_col = f"{col}_news"
-                if news_col in merged.columns:
-                    merged[col] = merged[news_col].combine_first(merged[col])
-                    merged = merged.drop(columns=[news_col])
-            if 'news_article_count_news' in merged.columns:
-                merged['news_article_count'] = (
-                    merged['news_article_count_news'].fillna(merged['news_article_count']).fillna(0).astype(int)
+            frames = []
+            for ticker, base in self.df.groupby('ticker', sort=False):
+                news_slice = grouped[grouped['ticker'] == ticker].sort_values('date')
+                base_sorted = base.copy()
+                base_sorted['date'] = pd.to_datetime(base_sorted['date'], errors='coerce')
+                base_sorted = base_sorted.sort_values('date')
+                if news_slice.empty:
+                    frames.append(base_sorted)
+                    continue
+
+                merged = pd.merge_asof(
+                    base_sorted,
+                    news_slice.drop(columns=['ticker']),
+                    on='date',
+                    direction='nearest',
+                    tolerance=pd.Timedelta(days=90),
                 )
-                merged = merged.drop(columns=['news_article_count_news'])
-            self.df = merged
+                if 'news_article_count' in merged.columns:
+                    merged['news_article_count'] = merged['news_article_count'].fillna(0).astype(int)
+                merged['ticker'] = ticker
+                frames.append(merged)
+            self.df = pd.concat(frames, ignore_index=True).sort_values(['ticker', 'date']).reset_index(drop=True)
+        if 'latest_event_type' not in self.df.columns:
+            self.df['latest_event_type'] = pd.NA
+        if 'latest_sentiment' not in self.df.columns:
+            self.df['latest_sentiment'] = pd.NA
+        if 'news_article_count' not in self.df.columns:
+            self.df['news_article_count'] = 0
+
+        # --- Revenue growth ---
+        if 'revenue' in self.df.columns:
+            self.df['revenue_growth'] = self.df['revenue'].pct_change()
+        else:
+            self.df['revenue_growth'] = np.nan
+
+        # --- D/E ratio alias (spec output name: de_ratio) ---
+        if 'debt_to_equity' in self.df.columns:
+            self.df['de_ratio'] = self.df['debt_to_equity']
+        elif 'total_debt' in self.df.columns and 'equity' in self.df.columns:
+            self.df['de_ratio'] = np.where(
+                self.df['equity'].notna() & (self.df['equity'] != 0),
+                self.df['total_debt'] / self.df['equity'],
+                np.nan,
+            )
+        else:
+            self.df['de_ratio'] = np.nan
+
+        # --- Rolling P/E and P/B averages ---
+        for ratio_col, avg_1y, avg_5y in [
+            ('pe', 'pe_1y_avg', 'pe_5y_avg'),
+            ('pb', 'pb_1y_avg', 'pb_5y_avg'),
+        ]:
+            if ratio_col in self.df.columns:
+                self.df[avg_1y] = self.df[ratio_col].rolling(window=4, min_periods=1).mean()
+                self.df[avg_5y] = self.df[ratio_col].rolling(window=20, min_periods=1).mean()
+            else:
+                self.df[avg_1y] = np.nan
+                self.df[avg_5y] = np.nan
+
+        # --- Industry P/E and P/B passthrough ---
+        self.df['pe_industry'] = np.nan
+        self.df['pb_industry'] = np.nan
+        if industry_df is not None and not industry_df.empty:
+            ind = industry_df.copy()
+            ind['date'] = pd.to_datetime(ind['date'], errors='coerce')
+            ind = ind.sort_values('date')
+            if 'ticker' in ind.columns and self.ticker in ind['ticker'].values:
+                ind = ind[ind['ticker'] == self.ticker]
+            if 'industry_pe' in ind.columns:
+                tmp_pe = ind[['date', 'industry_pe']].dropna(subset=['industry_pe'])
+                if not tmp_pe.empty:
+                    merged_pe = pd.merge_asof(
+                        self.df[['date']].sort_values('date'),
+                        tmp_pe.rename(columns={'industry_pe': 'pe_industry'}),
+                        on='date',
+                        direction='backward',
+                    )
+                    self.df['pe_industry'] = merged_pe['pe_industry'].values
+            if 'industry_pb' in ind.columns:
+                tmp_pb = ind[['date', 'industry_pb']].dropna(subset=['industry_pb'])
+                if not tmp_pb.empty:
+                    merged_pb = pd.merge_asof(
+                        self.df[['date']].sort_values('date'),
+                        tmp_pb.rename(columns={'industry_pb': 'pb_industry'}),
+                        on='date',
+                        direction='backward',
+                    )
+                    self.df['pb_industry'] = merged_pb['pb_industry'].values
 
         logger.info(
-            "[%s] engineer_fundamental_features done | added leverage/coverage/zscore/turnover/news columns",
+            "[%s] engineer_fundamental_features done | added leverage/coverage/zscore/turnover/news/revenue_growth/de_ratio/pe_pb_avgs columns",
             self.ticker,
+        )
+        return self
+
+    def calc_dcf_valuation(
+        self,
+        beta: float | None = None,
+        risk_free_rate: float = 0.045,
+        market_risk_premium: float = 0.055,
+        current_price: float | None = None,
+        projection_years: int = 5,
+    ) -> "DataProcessor":
+        """FCFE-based DCF intrinsic price using CAPM cost of equity.
+
+        Ke  = risk_free_rate + beta * market_risk_premium
+        g   = trailing 3-year annualised FCFE CAGR (quarterly data → 12-period lag),
+              floored at 0 and capped at Ke − 0.01 to avoid terminal value blow-up.
+
+        Equity value per row = annual_fcfe * (1 + g) / (Ke − g)
+        (mathematically equivalent to n-year projected DCF + terminal value at g)
+        Intrinsic price = equity_value / shares_outstanding
+        Upside          = (intrinsic_price − current_price) / current_price
+        """
+        _beta = beta if beta is not None else 1.0
+        ke = risk_free_rate + _beta * market_risk_premium
+
+        if 'fcfe' not in self.df.columns:
+            self.df['dcf_intrinsic_price'] = np.nan
+            self.df['dcf_upside'] = np.nan
+            logger.info("[%s] calc_dcf_valuation: fcfe column missing, setting NaN", self.ticker)
+            return self
+
+        # Annual FCFE = rolling sum of 4 quarters
+        annual_fcfe = self.df['fcfe'].rolling(window=4, min_periods=4).sum()
+
+        # Growth rate: 3-year CAGR (12-quarter lag)
+        fcfe_3y_ago = annual_fcfe.shift(12)
+        with np.errstate(divide='ignore', invalid='ignore'):
+            g_raw = np.where(
+                fcfe_3y_ago.notna() & (fcfe_3y_ago > 0)
+                & annual_fcfe.notna() & (annual_fcfe > 0),
+                (annual_fcfe / fcfe_3y_ago) ** (1.0 / 3.0) - 1.0,
+                0.05,
+            )
+        g = np.clip(g_raw, 0.0, max(ke - 0.01, 0.001))
+
+        shares = self.df.get('shares_outstanding')
+        if not isinstance(shares, pd.Series):
+            shares = pd.Series(np.nan, index=self.df.index)
+        shares = pd.to_numeric(shares, errors='coerce').reindex(self.df.index)
+        if shares.isna().all() and current_price is not None and current_price > 0:
+            market_cap = self.df.get('market_cap')
+            if isinstance(market_cap, pd.Series):
+                market_cap = pd.to_numeric(market_cap, errors='coerce').reindex(self.df.index)
+                shares = market_cap / current_price
+                logger.info(
+                    "[%s] calc_dcf_valuation: shares_outstanding missing, derived from market_cap/current_price",
+                    self.ticker,
+                )
+
+        kd_safe = np.where(np.abs(ke - g) < 1e-6, 1e-6, ke - g)
+        annual_fcfe_arr = np.asarray(annual_fcfe, dtype=float)
+        has_fcfe_history = annual_fcfe.notna()
+        has_positive_fcfe = annual_fcfe > 0
+        has_shares = shares.notna() & (shares > 0)
+        equity_value = np.where(
+            has_fcfe_history,
+            annual_fcfe_arr * (1.0 + g) / kd_safe,
+            np.nan,
+        )
+
+        intrinsic_price = np.where(
+            pd.notna(equity_value) & has_shares,
+            equity_value / shares.to_numpy(dtype=float),
+            np.nan,
+        )
+        self.df['dcf_intrinsic_price'] = np.where(
+            np.isfinite(intrinsic_price),
+            intrinsic_price,
+            np.nan,
+        )
+
+        ref_price = current_price if (current_price is not None and current_price > 0) else None
+        if ref_price is not None:
+            self.df['dcf_upside'] = np.where(
+                self.df['dcf_intrinsic_price'].notna(),
+                (self.df['dcf_intrinsic_price'] - ref_price) / ref_price,
+                np.nan,
+            )
+        else:
+            self.df['dcf_upside'] = np.nan
+
+        # Quality flags: keep computed values visible while surfacing why a row may be unreliable.
+        invalid_reasons = np.select(
+            [
+                ~has_fcfe_history,
+                ~has_shares,
+                ~np.isfinite(self.df['dcf_intrinsic_price']),
+                ~has_positive_fcfe,
+                self.df['dcf_intrinsic_price'] <= 0,
+            ],
+            [
+                "insufficient_fcfe_history",
+                "missing_or_nonpositive_shares_outstanding",
+                "intrinsic_price_not_finite",
+                "non_positive_annual_fcfe",
+                "non_positive_intrinsic_price",
+            ],
+            default="",
+        )
+        self.df['dcf_invalid_reason'] = pd.Series(invalid_reasons, index=self.df.index).replace("", pd.NA)
+        self.df['dcf_is_valid'] = self.df['dcf_invalid_reason'].isna()
+
+        valid_count = int(self.df['dcf_intrinsic_price'].notna().sum())
+        valid_quality_count = int(self.df['dcf_is_valid'].sum())
+        logger.info(
+            "[%s] calc_dcf_valuation done | Ke=%.4f | %d rows with intrinsic price | %d rows marked valid",
+            self.ticker, ke, valid_count, valid_quality_count,
         )
         return self
 
@@ -702,9 +942,11 @@ class DataProcessor:
         self.calc_max_drawdown()
         self.calc_momentum_oscillators()
         self.calc_extended_oscillators()
+        self.calc_price_volume_anomalies()
         self.calc_pivot_points()
         self.calc_atr()
         self.calc_sharpe_ratio()
+        self.calc_var()
 
         return self.df
 

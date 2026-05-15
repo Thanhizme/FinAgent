@@ -24,15 +24,240 @@ PRESET_TICKERS = [
     "AAPL", "MSFT", "MANH", "TER", "IDCC", "KLIC",
     "JPM", "V", "SF", "JEF", "DFIN", "VBTX",
     "AMGN", "ELV", "HALO", "EHC", "HIMS", "NSTG",
-    "AMZN", "TSLA", "DECK", "CROX", "CMG", "BOOT", "SONO",
+    "AMZN", "TSLA", "DECK", "CROX", "BOOT", "SONO",
     "MDLZ", "KMB", "CASY", "CELH", "CALM", "JJSF",
     "LMT", "GE", "DE", "UPS", "BYRN", "MLKN",
     "XOM", "CVX", "OVV", "APA", "REPX", "PARR",
     "D", "NEE", "VST", "NRG", "AWR", "AVA",
     "PLD", "EQIX", "REXR", "OHI", "LGIH", "UTL",
     "LIN", "SHW", "RS", "STLD", "MLI", "IOSP",
-    "GOOGL", "META", "PINS", "TTWO", "CNK", "YELP", "FOX",
+    "GOOGL", "META", "PINS", "TTWO", "CNK", "YELP",
+
+    # VN tickers from the provided sector/cap table
+    "VCB", "BID", "LPB", "MSB", "BVB", "ABB",
+    "VHM", "VIC", "KDH", "NLG", "DRH", "HQC",
+    "VNM", "MSN", "PAN", "VHC", "ANV", "IDI",
+    "SSI", "VND", "VCI", "HCM", "BSI", "FTS",
+    "HPG", "GVR", "HSG", "NKG", "TVN", "VGS",
+    "GAS", "PLX", "PVS", "PVD", "PVC", "PVB",
+    "MWG", "PNJ", "FRT", "DGW", "PET", "ASG",
+    "DGC", "DPM", "DCM", "CSV", "BFC", "LAS",
+    "VCG", "REE", "CTD", "HHV", "LCG", "C4G",
+    "POW", "PGV", "GEG", "HDG", "TDM", "BWE",
+    "FPT", "VGI", "CMG", "FOX", "ELC", "ITD",
+    "VJC", "GMD", "HAH", "PVT", "VIP", "VTO",
+    "DHG", "DMC", "TRA", "IMP", "DBD", "OPC",
+    "BVH", "PVI", "MIG", "BMI", "BIC", "PGI",
+    "MSH", "TNG", "GIL", "TCM", "ADS",
+    "VNG", "HVN", "OCH", "NVT", "DSN", "SKG",
+    "YEG", "ABC", "VNB", "TTN",
+    "HAX", "DRC", "CSM", "TMT", "SVC", "HTL",
+    "DAH", "RIC", "CTC", "DXL",
 ]
+
+# US-only comparison pairs from the provided sector/cap table.
+US_COMPARISON_PEERS = {
+    "AAPL": "MSFT",
+    "MSFT": "AAPL",
+    "MANH": "TER",
+    "TER": "MANH",
+    "IDCC": "KLIC",
+    "KLIC": "IDCC",
+    "JPM": "V",
+    "V": "JPM",
+    "SF": "JEF",
+    "JEF": "SF",
+    "DFIN": "VBTX",
+    "VBTX": "DFIN",
+    "AMGN": "ELV",
+    "ELV": "AMGN",
+    "HALO": "EHC",
+    "EHC": "HALO",
+    "HIMS": "NSTG",
+    "NSTG": "HIMS",
+    "AMZN": "TSLA",
+    "TSLA": "AMZN",
+    "DECK": "CROX",
+    "CROX": "DECK",
+    "BOOT": "SONO",
+    "SONO": "BOOT",
+    "MDLZ": "KMB",
+    "KMB": "MDLZ",
+    "CASY": "CELH",
+    "CELH": "CASY",
+    "CALM": "JJSF",
+    "JJSF": "CALM",
+    "LMT": "GE",
+    "GE": "LMT",
+    "DE": "UPS",
+    "UPS": "DE",
+    "BYRN": "MLKN",
+    "MLKN": "BYRN",
+    "XOM": "CVX",
+    "CVX": "XOM",
+    "OVV": "APA",
+    "APA": "OVV",
+    "REPX": "PARR",
+    "PARR": "REPX",
+    "D": "NEE",
+    "NEE": "D",
+    "VST": "NRG",
+    "NRG": "VST",
+    "AWR": "AVA",
+    "AVA": "AWR",
+    "PLD": "EQIX",
+    "EQIX": "PLD",
+    "REXR": "OHI",
+    "OHI": "REXR",
+    "LGIH": "UTL",
+    "UTL": "LGIH",
+    "LIN": "SHW",
+    "SHW": "LIN",
+    "RS": "STLD",
+    "STLD": "RS",
+    "MLI": "IOSP",
+    "IOSP": "MLI",
+    "GOOGL": "META",
+    "META": "GOOGL",
+    "PINS": "TTWO",
+    "TTWO": "PINS",
+    "CNK": "YELP",
+    "YELP": "CNK",
+}
+
+VN_COMPARISON_PEERS = {
+    "VCB": "BID",
+    "BID": "VCB",
+    "LPB": "MSB",
+    "MSB": "LPB",
+    "BVB": "ABB",
+    "ABB": "BVB",
+    "VHM": "VIC",
+    "VIC": "VHM",
+    "KDH": "NLG",
+    "NLG": "KDH",
+    "DRH": "HQC",
+    "HQC": "DRH",
+    "VNM": "MSN",
+    "MSN": "VNM",
+    "PAN": "VHC",
+    "VHC": "PAN",
+    "ANV": "IDI",
+    "IDI": "ANV",
+    "SSI": "VND",
+    "VND": "SSI",
+    "VCI": "HCM",
+    "HCM": "VCI",
+    "BSI": "FTS",
+    "FTS": "BSI",
+    "HPG": "GVR",
+    "GVR": "HPG",
+    "HSG": "NKG",
+    "NKG": "HSG",
+    "TVN": "VGS",
+    "VGS": "TVN",
+    "GAS": "PLX",
+    "PLX": "GAS",
+    "PVS": "PVD",
+    "PVD": "PVS",
+    "PVC": "PVB",
+    "PVB": "PVC",
+    "MWG": "PNJ",
+    "PNJ": "MWG",
+    "FRT": "DGW",
+    "DGW": "FRT",
+    "PET": "ASG",
+    "ASG": "PET",
+    "DGC": "DPM",
+    "DPM": "DGC",
+    "DCM": "CSV",
+    "CSV": "DCM",
+    "BFC": "LAS",
+    "LAS": "BFC",
+    "VCG": "REE",
+    "REE": "VCG",
+    "CTD": "HHV",
+    "HHV": "CTD",
+    "LCG": "C4G",
+    "C4G": "LCG",
+    "POW": "PGV",
+    "PGV": "POW",
+    "GEG": "HDG",
+    "HDG": "GEG",
+    "TDM": "BWE",
+    "BWE": "TDM",
+    "FPT": "VGI",
+    "VGI": "FPT",
+    "CMG": "FOX",
+    "FOX": "CMG",
+    "ELC": "ITD",
+    "ITD": "ELC",
+    "VJC": "GMD",
+    "GMD": "VJC",
+    "HAH": "PVT",
+    "PVT": "HAH",
+    "VIP": "VTO",
+    "VTO": "VIP",
+    "DHG": "DMC",
+    "DMC": "DHG",
+    "TRA": "IMP",
+    "IMP": "TRA",
+    "DBD": "OPC",
+    "OPC": "DBD",
+    "BVH": "PVI",
+    "PVI": "BVH",
+    "MIG": "BMI",
+    "BMI": "MIG",
+    "BIC": "PGI",
+    "PGI": "BIC",
+    "MSH": "PNJ",
+    "TNG": "GIL",
+    "GIL": "TNG",
+    "TCM": "ADS",
+    "ADS": "TCM",
+    "VNG": "HVN",
+    "HVN": "VNG",
+    "OCH": "NVT",
+    "NVT": "OCH",
+    "DSN": "SKG",
+    "SKG": "DSN",
+    "YEG": "ABC",
+    "ABC": "YEG",
+    "VNB": "TTN",
+    "TTN": "VNB",
+    "HAX": "DRC",
+    "DRC": "HAX",
+    "CSM": "TMT",
+    "TMT": "CSM",
+    "SVC": "HTL",
+    "HTL": "SVC",
+    "DAH": "RIC",
+    "RIC": "DAH",
+    "CTC": "DXL",
+    "DXL": "CTC",
+}
+
+VN_TICKERS = {
+    "VCB", "BID", "LPB", "MSB", "BVB", "ABB",
+    "VHM", "VIC", "KDH", "NLG", "DRH", "HQC",
+    "VNM", "MSN", "PAN", "VHC", "ANV", "IDI",
+    "SSI", "VND", "VCI", "HCM", "BSI", "FTS",
+    "HPG", "GVR", "HSG", "NKG", "TVN", "VGS",
+    "GAS", "PLX", "PVS", "PVD", "PVC", "PVB",
+    "MWG", "PNJ", "FRT", "DGW", "PET", "ASG",
+    "DGC", "DPM", "DCM", "CSV", "BFC", "LAS",
+    "VCG", "REE", "CTD", "HHV", "LCG", "C4G",
+    "POW", "PGV", "GEG", "HDG", "TDM", "BWE",
+    "FPT", "VGI", "CMG", "FOX", "ELC", "ITD",
+    "VJC", "GMD", "HAH", "PVT", "VIP", "VTO",
+    "DHG", "DMC", "TRA", "IMP", "DBD", "OPC",
+    "BVH", "PVI", "MIG", "BMI", "BIC", "PGI",
+    "MSH", "TNG", "GIL", "TCM", "ADS",
+    "VNG", "HVN", "OCH", "NVT", "DSN", "SKG",
+    "YEG", "ABC", "VNB", "TTN",
+    "HAX", "DRC", "CSM", "TMT", "SVC", "HTL",
+    "DAH", "RIC", "CTC", "DXL",
+}
 
 def parse_tickers(raw: str) -> list[str]:
     parts = raw.replace(",", " ").split()
@@ -116,6 +341,14 @@ def available_tickers() -> list[str]:
 
     return sorted(tickers)
 
+
+def comparison_peer_for(ticker: str, all_tickers: list[str]) -> str | None:
+    ticker = (ticker or "").strip().upper()
+    peer = US_COMPARISON_PEERS.get(ticker) or VN_COMPARISON_PEERS.get(ticker)
+    if peer and peer in all_tickers:
+        return peer
+    return None
+
 def available_processed_tickers() -> list[str]:
     tickers = []
     seen = set()
@@ -157,8 +390,20 @@ def chart_files_for_ticker(ticker: str, timeframe: str) -> list[Path]:
 def returns_distribution_path(ticker: str) -> Path:
     return VIS_DIR / f"{ticker.lower()}_returns_distribution.html"
 
-def correlation_heatmap_path(ticker: str) -> Path:
-    return VIS_DIR / f"{ticker.lower()}_correlation_heatmap.html"
+def rolling_stats_path(ticker: str) -> Path:
+    return VIS_DIR / f"{ticker.lower()}_rolling_stats.html"
+
+def portfolio_performance_path() -> Path:
+    return VIS_DIR / "portfolio_cumulative_performance.html"
+
+def portfolio_indicator_correlation_path() -> Path:
+    return VIS_DIR / "portfolio_indicator_correlation.html"
+
+def portfolio_asset_correlation_path() -> Path:
+    return VIS_DIR / "portfolio_asset_correlation.html"
+
+def portfolio_efficient_frontier_path() -> Path:
+    return VIS_DIR / "portfolio_efficient_frontier.html"
 
 def ensure_chart_file(ticker: str, timeframe: str, price_df: pd.DataFrame) -> Path | None:
     files = chart_files_for_ticker(ticker, timeframe)
@@ -192,8 +437,73 @@ def ensure_returns_distribution_chart(ticker: str, price_df: pd.DataFrame) -> Pa
         st.error(f"Unable to generate returns distribution for {ticker}: {exc}")
         return None
 
+def ensure_rolling_stats_chart(ticker: str, price_df: pd.DataFrame) -> Path | None:
+    path = rolling_stats_path(ticker)
+    if price_df is None or price_df.empty:
+        return path if path.exists() else None
+
+    try:
+        visualizer = DataVisualizer({ticker: price_df})
+        visualizer.rolling_stats_chart(ticker=ticker, save=True)
+        return path if path.exists() else None
+    except Exception as exc:
+        st.error(f"Unable to generate rolling stats chart for {ticker}: {exc}")
+        return None
+
+def ensure_portfolio_charts(
+    ticker_a: str,
+    ticker_b: str,
+    price_a: pd.DataFrame,
+    price_b: pd.DataFrame | None,
+    benchmark_df: pd.DataFrame | None,
+    benchmark_label: str,
+) -> dict[str, Path | None]:
+    paths = {
+        "performance": portfolio_performance_path(),
+        "indicator_corr": portfolio_indicator_correlation_path(),
+        "asset_corr": portfolio_asset_correlation_path(),
+        "frontier": portfolio_efficient_frontier_path(),
+    }
+
+    if price_a is None or price_a.empty or price_b is None or price_b.empty:
+        return {k: (p if p.exists() else None) for k, p in paths.items()}
+
+    try:
+        vis_data = {ticker_a: price_a, ticker_b: price_b}
+        visualizer = DataVisualizer(vis_data)
+        visualizer.performance_comparison_chart(
+            ticker_a=ticker_a,
+            ticker_b=ticker_b,
+            benchmark_df=benchmark_df,
+            benchmark_label=benchmark_label,
+            save=True,
+        )
+        visualizer.indicator_correlation_heatmap(
+            ticker_a=ticker_a,
+            ticker_b=ticker_b,
+            benchmark_df=benchmark_df,
+            benchmark_label=benchmark_label,
+            save=True,
+        )
+        visualizer.asset_return_correlation_heatmap(
+            ticker_a=ticker_a,
+            ticker_b=ticker_b,
+            benchmark_df=benchmark_df,
+            benchmark_label=benchmark_label,
+            save=True,
+        )
+        visualizer.efficient_frontier_chart(
+            ticker_a=ticker_a,
+            ticker_b=ticker_b,
+            save=True,
+        )
+        return {k: (p if p.exists() else None) for k, p in paths.items()}
+    except Exception as exc:
+        st.error(f"Unable to generate portfolio charts: {exc}")
+        return {k: (p if p.exists() else None) for k, p in paths.items()}
+
 def ensure_correlation_heatmap_chart(ticker: str, price_df: pd.DataFrame) -> Path | None:
-    path = correlation_heatmap_path(ticker)
+    path = portfolio_indicator_correlation_path()
     if price_df is None or price_df.empty:
         return path if path.exists() else None
 
@@ -231,6 +541,15 @@ def has_configured_api_key(env_var: str) -> bool:
         return False
     return not value.lower().startswith("your_")
 
+
+def ticker_market(ticker: str) -> str:
+    t = (ticker or "").strip().upper()
+    return "VN" if t in VN_TICKERS else "GLOBAL"
+
+
+def benchmark_label_for_ticker(ticker: str) -> str:
+    return "VNINDEX" if ticker_market(ticker) == "VN" else "S&P 500"
+
 st.set_page_config(
     page_title="FinAgent Exchange UI",
     page_icon="chart_with_upwards_trend",
@@ -260,10 +579,17 @@ st.caption("Exchange-style dashboard with ticker picker, refresh, and instant re
 with st.sidebar:
     st.header("Run Settings")
 
-    existing_tickers = available_tickers()
+    selected_market = st.session_state.get("ticker_market_filter", "US")
     picker_mode = st.radio("Ticker source", ["Dropdown", "Manual input"], horizontal=False)
 
-    if picker_mode == "Dropdown" and existing_tickers:
+    if picker_mode == "Dropdown":
+        selected_market = st.selectbox("Market", ["US", "VN"], key="ticker_market_filter")
+        existing_tickers = [
+            t for t in available_tickers()
+            if ("VN" if t in VN_TICKERS else "US") == selected_market
+        ]
+        if not existing_tickers:
+            existing_tickers = available_tickers()
         selected_ticker = st.selectbox("Select ticker", existing_tickers, index=0)
         raw_tickers = selected_ticker
     else:
@@ -295,11 +621,21 @@ with st.sidebar:
 
     st.markdown("---")
     st.markdown("**Comparison**")
-    _all_tickers = available_tickers()
-    _other_tickers = [t for t in _all_tickers if t != (selected_ticker if "selected_ticker" in locals() else "")]
+    if picker_mode == "Dropdown":
+        _all_tickers = [
+            t for t in available_tickers()
+            if ("VN" if t in VN_TICKERS else "US") == selected_market
+        ]
+    else:
+        _all_tickers = available_tickers()
+    _peer_ticker = comparison_peer_for(selected_ticker if "selected_ticker" in locals() else "", _all_tickers)
+    _other_tickers = [_peer_ticker] if _peer_ticker else [t for t in _all_tickers if t != (selected_ticker if "selected_ticker" in locals() else "")]
+    _comparison_options = _other_tickers if _other_tickers else ["—"]
+    if st.session_state.get("stock_b_selector") not in _comparison_options:
+        st.session_state["stock_b_selector"] = _comparison_options[0]
     stock_b_sidebar = st.selectbox(
         "Compare vs (Stock B)",
-        _other_tickers if _other_tickers else ["—"],
+        _comparison_options,
         key="stock_b_selector",
     )
     st.caption("Stock B will be collected and processed together with Stock A when you press Run.")
@@ -323,7 +659,7 @@ if "selected_ticker" not in st.session_state:
 if "ai_analysis_cache" not in st.session_state:
     st.session_state["ai_analysis_cache"] = {}
 if "active_dashboard_panel" not in st.session_state:
-    st.session_state["active_dashboard_panel"] = "Price & Volume"
+    st.session_state["active_dashboard_panel"] = "Individual Analysis"
 
 if refresh_clicked:
     run_clicked = True
@@ -331,6 +667,10 @@ if refresh_clicked:
 if run_clicked:
     tickers = parse_tickers(raw_tickers or "")
     stock_b_for_run = (st.session_state.get("stock_b_selector") or "").strip().upper()
+    expected_peer = comparison_peer_for(tickers[0] if tickers else "", available_tickers())
+    if expected_peer and stock_b_for_run and stock_b_for_run not in {"", "—", expected_peer}:
+        st.error(f"Stock B must be the same sector/cap peer of {tickers[0]}: {expected_peer}.")
+        st.stop()
     if stock_b_for_run and stock_b_for_run != "—" and stock_b_for_run not in tickers:
         tickers.append(stock_b_for_run)
     if not tickers:
@@ -384,13 +724,14 @@ if dashboard_ticker:
 
         active_panel = st.radio(
             "View",
-            ["Price & Volume", "Oscillators - Returns Distribution", "Comparison"],
+            ["Individual Analysis", "Portfolio & Comparison"],
             key="active_dashboard_panel",
             horizontal=True,
             label_visibility="collapsed",
         )
 
-        if active_panel == "Price & Volume":
+        if active_panel == "Individual Analysis":
+            st.markdown("#### Price & Volume")
             chart_path = ensure_chart_file(dashboard_ticker, st.session_state["last_timeframe"], price_df)
             if chart_path is not None:
                 if st.session_state["last_timeframe"] == "all":
@@ -407,18 +748,19 @@ if dashboard_ticker:
             else:
                 st.warning(f"Chart not available for {dashboard_ticker}.")
 
-        elif active_panel == "Oscillators - Returns Distribution":
+            st.markdown("#### Returns Distribution")
             dist_path = ensure_returns_distribution_chart(dashboard_ticker, price_df)
             if dist_path is not None:
                 render_chart(dist_path)
             else:
                 st.warning(f"Returns distribution chart not available for {dashboard_ticker}.")
 
-            heatmap_path = ensure_correlation_heatmap_chart(dashboard_ticker, price_df)
-            if heatmap_path is not None:
-                render_chart(heatmap_path)
+            st.markdown("#### Rolling Stats")
+            rolling_path = ensure_rolling_stats_chart(dashboard_ticker, price_df)
+            if rolling_path is not None:
+                render_chart(rolling_path)
             else:
-                st.warning(f"Correlation heatmap not available for {dashboard_ticker}.")
+                st.warning(f"Rolling stats chart not available for {dashboard_ticker}.")
 
             if "daily_return" in price_df.columns:
                 returns = price_df["daily_return"].dropna()
@@ -447,6 +789,9 @@ if dashboard_ticker:
                 fund_b = load_fundamental_df(stock_b)
                 benchmark_df = load_benchmark_df()
 
+                if ticker_market(dashboard_ticker) == "VN" and (benchmark_df is None or benchmark_df.empty):
+                    st.warning("VNINDEX benchmark data is currently unavailable from source. The performance chart will show only Stock A and Stock B.")
+
                 missing_for_pair = []
                 if price_b is None or price_b.empty:
                     missing_for_pair.append(stock_b)
@@ -462,22 +807,42 @@ if dashboard_ticker:
                         + ". Press Run to collect and process Stock A + Stock B together."
                     )
 
-                st.markdown("#### Performance Chart")
-                perf_data = {dashboard_ticker: price_df}
-                if price_b is not None:
-                    perf_data[stock_b] = price_b
-                perf_visualizer = DataVisualizer(perf_data)
-                perf_fig = perf_visualizer.performance_comparison_chart(
+                chart_bundle = ensure_portfolio_charts(
                     ticker_a=dashboard_ticker,
                     ticker_b=stock_b,
+                    price_a=price_df,
+                    price_b=price_b,
                     benchmark_df=benchmark_df,
-                    benchmark_label="VNI",
-                    save=True,
+                    benchmark_label=benchmark_label_for_ticker(dashboard_ticker),
                 )
-                if perf_fig is not None:
-                    st.plotly_chart(perf_fig, width="stretch")
+
+                st.markdown("#### Cumulative Performance")
+                perf_path = chart_bundle.get("performance")
+                if perf_path is not None:
+                    render_chart(perf_path, height=620)
                 else:
-                    st.warning("Not enough data to build performance chart for Stock A, Stock B, and VNI.")
+                    st.warning("Not enough data to build cumulative performance chart.")
+
+                st.markdown("#### Indicator Correlation Heatmap")
+                indicator_corr_path = chart_bundle.get("indicator_corr")
+                if indicator_corr_path is not None:
+                    render_chart(indicator_corr_path, height=820)
+                else:
+                    st.warning("Indicator correlation heatmap not available.")
+
+                st.markdown("#### Asset Correlation Heatmap")
+                asset_corr_path = chart_bundle.get("asset_corr")
+                if asset_corr_path is not None:
+                    render_chart(asset_corr_path, height=560)
+                else:
+                    st.warning("Asset correlation heatmap not available.")
+
+                st.markdown("#### Efficient Frontier")
+                frontier_path = chart_bundle.get("frontier")
+                if frontier_path is not None:
+                    render_chart(frontier_path, height=620)
+                else:
+                    st.warning("Efficient frontier chart not available.")
 
                 def _last_val(df, col, pct=False, dollar=False):
                     if df is None or df.empty or col not in df.columns:
@@ -526,7 +891,7 @@ if dashboard_ticker:
                     ("RSI 14", _last_tech(price_df, "rsi_14"), _last_tech(price_b, "rsi_14")),
                     ("MACD Line", _last_tech(price_df, "macd_line"), _last_tech(price_b, "macd_line")),
                     ("Sharpe Ratio", _last_tech(price_df, "sharpe_ratio"), _last_tech(price_b, "sharpe_ratio")),
-                    ("Volatility 20d", _last_tech(price_df, "volatility_20", pct=True), _last_tech(price_b, "volatility_20", pct=True)),
+                    ("Volatility 30d", _last_tech(price_df, "volatility_30", pct=True), _last_tech(price_b, "volatility_30", pct=True)),
                     ("Beta", _last_tech(price_df, "beta"), _last_tech(price_b, "beta")),
                     ("Max Drawdown", _last_tech(price_df, "max_drawdown", pct=True), _last_tech(price_b, "max_drawdown", pct=True)),
                     ("Rel. Strength", _last_tech(price_df, "relative_strength"), _last_tech(price_b, "relative_strength")),
@@ -588,18 +953,6 @@ if dashboard_ticker:
                     st.plotly_chart(cmp_fig, width="stretch")
                 except Exception as exc:
                     st.warning(f"Could not render comparison bar chart: {exc}")
-
-                st.markdown("#### Efficient Frontier")
-                try:
-                    ef_visualizer = DataVisualizer(all_price_data)
-                    ef_fig = ef_visualizer.efficient_frontier_chart(
-                        ticker_a=dashboard_ticker,
-                        ticker_b=stock_b,
-                        save=True,
-                    )
-                    st.plotly_chart(ef_fig, width="stretch")
-                except Exception as exc:
-                    st.warning(f"Could not render efficient frontier: {exc}")
 
                 st.markdown("#### AI Analysis")
                 st.caption("Generate grounded narrative analysis using Gemini from the current processed metrics.")

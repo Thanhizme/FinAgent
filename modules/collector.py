@@ -22,6 +22,16 @@ import yfinance as yf
 import requests
 from dotenv import load_dotenv
 
+try:
+    from vnstock.api.quote import Quote as VnQuote
+except Exception:  # pragma: no cover - optional dependency
+    VnQuote = None
+
+try:
+    from vnstock import Finance as VnFinance
+except Exception:  # pragma: no cover - optional dependency
+    VnFinance = None
+
 load_dotenv()
 
 logger = logging.getLogger(__name__)
@@ -46,56 +56,283 @@ class DataCollector:
         "VN":     "^VNINDEX",
     }
 
-    _PEER_MAP = {
-        "AAPL":  ["MSFT", "MANH", "TER", "IDCC", "KLIC"],
-        "MSFT":  ["AAPL", "MANH", "TER", "IDCC", "KLIC"],
-        
-        "JPM":   ["V", "SF", "JEF", "DFIN", "VBTX"],
-        "V":     ["JPM", "SF", "JEF", "DFIN", "VBTX"],
-        
-        "AMGN":  ["ELV", "HALO", "EHC", "HIMS", "NSTG"],
-        
-        "AMZN":  ["TSLA", "DECK", "CROX", "BOOT", "SONO"],
-        "TSLA":  ["AMZN", "DECK", "CROX", "BOOT", "SONO"],
-        
-        "MDLZ":  ["KMB", "CASY", "CELH", "CALM", "JJSF"],
-        
-        "LMT":   ["GE", "DE", "UPS", "BYRN", "MLKN"],
-        "GE":    ["LMT", "DE", "UPS", "BYRN", "MLKN"],
-        
-        "XOM":   ["CVX", "OVV", "APA", "REPX", "PARR"],
-        "CVX":   ["XOM", "OVV", "APA", "REPX", "PARR"],
-        
-        "D":     ["NEE", "VST", "NRG", "AWR", "AVA"],
-        
-        "PLD":   ["EQIX", "REXR", "OHI", "LGIH", "UTL"],
-        
-        "LIN":   ["SHW", "RS", "STLD", "MLI", "IOSP"],
-        
-        "GOOGL": ["META", "PINS", "TTWO", "CNK", "YELP"],
-        "META":  ["GOOGL", "PINS", "TTWO", "CNK", "YELP"],
+    _VN_BENCHMARK_PROXY_COMPONENTS = [
+        "VCB", "BID", "VHM", "VIC", "VNM", "MSN", "HPG", "FPT", "GAS", "MWG"
+    ]
 
-        "VCB":   ["BID", "LPB", "MSB", "BVB", "ABB"],
-        "BID":   ["VCB", "LPB", "MSB", "BVB", "ABB"],
-        
-        "VHM":   ["VIC", "KDH", "NLG", "DRH", "HQC"],
-        "VIC":   ["VHM", "KDH", "NLG", "DRH", "HQC"],
-        
-        "VNM":   ["MSN", "PAN", "VHC", "ANV", "IDI"],
-        "MSN":   ["VNM", "PAN", "VHC", "ANV", "IDI"],
-        
-        "SSI":   ["VND", "VCI", "HCM", "BSI", "FTS"],
-        "VND":   ["SSI", "VCI", "HCM", "BSI", "FTS"],
-        
-        "HPG":   ["GVR", "HSG", "NKG", "TVN", "VGS"],
-        
-        "GAS":   ["PLX", "PVS", "PVD", "PVC", "PVB"],
-        
-        "MWG":   ["PNJ", "FRT", "DGW", "PET", "ASG"],
-        "PNJ":   ["MWG", "FRT", "DGW", "PET", "ASG"],
-        
-        "FPT":   ["VGI", "CMG", "FOX", "ELC", "ITD"],
-        "VGI":   ["FPT", "CMG", "FOX", "ELC", "ITD"],
+    _PEER_MAP = {
+        # US peer pairs from the provided sector/cap table.
+        # Each ticker maps to exactly one same-sector, same-cap peer.
+
+        # Information Technology
+        # Large cap
+        "AAPL":  ["MSFT"],
+        "MSFT":  ["AAPL"],
+        # Mid cap
+        "MANH":  ["TER"],
+        "TER":   ["MANH"],
+        # Small cap
+        "IDCC":  ["KLIC"],
+        "KLIC":  ["IDCC"],
+
+        # Financials
+        # Large cap
+        "JPM":   ["V"],
+        "V":     ["JPM"],
+        # Mid cap
+        "SF":    ["JEF"],
+        "JEF":   ["SF"],
+        # Small cap 
+        "DFIN":  ["VBTX"],
+        "VBTX":  ["DFIN"],
+
+        # Health Care
+        # Large cap
+        "AMGN":  ["ELV"],
+        "ELV":   ["AMGN"],
+        # Mid cap
+        "HALO":  ["EHC"],
+        "EHC":   ["HALO"],
+        # Small cap
+        "HIMS":  ["NSTG"],
+        "NSTG":  ["HIMS"],
+
+        # Consumer Discretionary
+        # Large cap
+        "AMZN":  ["TSLA"],
+        "TSLA":  ["AMZN"],
+        # Mid cap
+        "DECK":  ["CROX"],
+        "CROX":  ["DECK"],
+        # Small cap
+        "BOOT":  ["SONO"],
+        "SONO":  ["BOOT"],
+
+        # Consumer Staples
+        # Large cap
+        "MDLZ":  ["KMB"],
+        "KMB":   ["MDLZ"],
+        # Mid cap
+        "CASY":  ["CELH"],
+        "CELH":  ["CASY"],
+        # Small cap
+        "CALM":  ["JJSF"],
+        "JJSF":  ["CALM"],
+
+        # Industrials
+        # Large cap 
+        "LMT":   ["GE"],
+        "GE":    ["LMT"],
+        # Mid cap
+        "DE":    ["UPS"],
+        "UPS":   ["DE"],
+        # Small cap
+        "BYRN":  ["MLKN"],
+        "MLKN":  ["BYRN"],
+
+        # Energy
+        # Large cap
+        "XOM":   ["CVX"],
+        "CVX":   ["XOM"],
+        # Mid cap
+        "OVV":   ["APA"],
+        "APA":   ["OVV"],
+        # Small cap
+        "REPX":  ["PARR"],
+        "PARR":  ["REPX"],
+
+        # Utilities
+        # Large cap
+        "D":     ["NEE"],
+        "NEE":   ["D"],
+        # Mid cap
+        "VST":   ["NRG"],
+        "NRG":   ["VST"],
+        # Small cap
+        "AWR":   ["AVA"],
+        "AVA":   ["AWR"],
+
+        # Real Estate
+        # Large cap
+        "PLD":   ["EQIX"],
+        "EQIX":  ["PLD"],
+        # Mid cap
+        "REXR":  ["OHI"],
+        "OHI":   ["REXR"],
+        # Small cap
+        "LGIH":  ["UTL"],
+        "UTL":   ["LGIH"],
+
+        # Materials
+        # Large cap
+        "LIN":   ["SHW"],
+        "SHW":   ["LIN"],
+        # Mid cap
+        "RS":    ["STLD"],
+        "STLD":  ["RS"],
+        # Small cap
+        "MLI":   ["IOSP"],
+        "IOSP":  ["MLI"],
+
+        # Communication Services
+        # Large cap
+        "GOOGL": ["META"],
+        "META":  ["GOOGL"],
+        # Mid cap
+        "PINS":  ["TTWO"],
+        "TTWO":  ["PINS"],
+        # Small cap
+        "CNK":   ["YELP"],
+        "YELP":  ["CNK"],
+    # VN peer pairs from the provided sector/cap table.
+    # Each ticker maps to one same-sector, same-cap peer.
+
+    # 1) Ngan hang
+    "VCB": ["BID"],
+    "BID": ["VCB"],
+    "LPB": ["MSB"],
+    "MSB": ["LPB"],
+    "BVB": ["ABB"],
+    "ABB": ["BVB"],
+
+    # 2) Bat dong san
+    "VHM": ["VIC"],
+    "VIC": ["VHM"],
+    "KDH": ["NLG"],
+    "NLG": ["KDH"],
+    "DRH": ["HQC"],
+    "HQC": ["DRH"],
+
+    # 3) Thuc pham & Do uong
+    "VNM": ["MSN"],
+    "MSN": ["VNM"],
+    "PAN": ["VHC"],
+    "VHC": ["PAN"],
+    "ANV": ["IDI"],
+    "IDI": ["ANV"],
+
+    # 4) Dich vu tai chinh
+    "SSI": ["VND"],
+    "VND": ["SSI"],
+    "VCI": ["HCM"],
+    "HCM": ["VCI"],
+    "BSI": ["FTS"],
+    "FTS": ["BSI"],
+
+    # 5) Tai nguyen co ban (Thep)
+    "HPG": ["GVR"],
+    "GVR": ["HPG"],
+    "HSG": ["NKG"],
+    "NKG": ["HSG"],
+    "TVN": ["VGS"],
+    "VGS": ["TVN"],
+
+    # 6) Dau khi
+    "GAS": ["PLX"],
+    "PLX": ["GAS"],
+    "PVS": ["PVD"],
+    "PVD": ["PVS"],
+    "PVC": ["PVB"],
+    "PVB": ["PVC"],
+
+    # 7) Ban le
+    "MWG": ["PNJ"],
+    "PNJ": ["MWG"],
+    "FRT": ["DGW"],
+    "DGW": ["FRT"],
+    "PET": ["ASG"],
+    "ASG": ["PET"],
+
+    # 8) Hoa chat
+    "DGC": ["DPM"],
+    "DPM": ["DGC"],
+    "DCM": ["CSV"],
+    "CSV": ["DCM"],
+    "BFC": ["LAS"],
+    "LAS": ["BFC"],
+
+    # 9) Xay dung & Vat lieu
+    "VCG": ["REE"],
+    "REE": ["VCG"],
+    "CTD": ["HHV"],
+    "HHV": ["CTD"],
+    "LCG": ["C4G"],
+    "C4G": ["LCG"],
+
+    # 10) Tien ich (Dien, Nuoc)
+    "POW": ["PGV"],
+    "PGV": ["POW"],
+    "GEG": ["HDG"],
+    "HDG": ["GEG"],
+    "TDM": ["BWE"],
+    "BWE": ["TDM"],
+
+    # 11) Cong nghe thong tin
+    "FPT": ["VGI"],
+    "VGI": ["FPT"],
+    "CMG": ["FOX"],
+    "FOX": ["CMG"],
+    "ELC": ["ITD"],
+    "ITD": ["ELC"],
+
+    # 12) Van tai & Kho bai
+    "VJC": ["GMD"],
+    "GMD": ["VJC"],
+    "HAH": ["PVT"],
+    "PVT": ["HAH"],
+    "VIP": ["VTO"],
+    "VTO": ["VIP"],
+
+    # 13) Y te & Duoc pham
+    "DHG": ["DMC"],
+    "DMC": ["DHG"],
+    "TRA": ["IMP"],
+    "IMP": ["TRA"],
+    "DBD": ["OPC"],
+    "OPC": ["DBD"],
+
+    # 14) Bao hiem
+    "BVH": ["PVI"],
+    "PVI": ["BVH"],
+    "MIG": ["BMI"],
+    "BMI": ["MIG"],
+    "BIC": ["PGI"],
+    "PGI": ["BIC"],
+
+    # 15) Hang ca nhan & Gia dung
+    "MSH": ["PNJ"],
+    "TNG": ["GIL"],
+    "GIL": ["TNG"],
+    "TCM": ["ADS"],
+    "ADS": ["TCM"],
+
+    # 16) Du lich & Giai tri
+    "VNG": ["HVN"],
+    "HVN": ["VNG"],
+    "OCH": ["NVT"],
+    "NVT": ["OCH"],
+    "DSN": ["SKG"],
+    "SKG": ["DSN"],
+
+    # 17) Truyen thong
+    "YEG": ["ABC"],
+    "ABC": ["YEG"],
+    "VNB": ["TTN"],
+    "TTN": ["VNB"],
+
+    # 18) O to & Phu tung
+    "HAX": ["DRC"],
+    "DRC": ["HAX"],
+    "CSM": ["TMT"],
+    "TMT": ["CSM"],
+    "SVC": ["HTL"],
+    "HTL": ["SVC"],
+
+    # 19) Dich vu luu tru & An uong
+    "DAH": ["RIC"],
+    "RIC": ["DAH"],
+    "CTC": ["DXL"],
+    "DXL": ["CTC"],
     }
 
     _VN_TICKERS = {
@@ -106,7 +343,18 @@ class DataCollector:
         "HPG", "GVR", "HSG", "NKG", "TVN", "VGS",
         "GAS", "PLX", "PVS", "PVD", "PVC", "PVB",
         "MWG", "PNJ", "FRT", "DGW", "PET", "ASG",
+        "DGC", "DPM", "DCM", "CSV", "BFC", "LAS",
+        "VCG", "REE", "CTD", "HHV", "LCG", "C4G",
+        "POW", "PGV", "GEG", "HDG", "TDM", "BWE",
         "FPT", "VGI", "CMG", "FOX", "ELC", "ITD",
+        "VJC", "GMD", "HAH", "PVT", "VIP", "VTO",
+        "DHG", "DMC", "TRA", "IMP", "DBD", "OPC",
+        "BVH", "PVI", "MIG", "BMI", "BIC", "PGI",
+        "MSH", "TNG", "GIL", "TCM", "ADS",
+        "VNG", "HVN", "OCH", "NVT", "DSN", "SKG",
+        "YEG", "ABC", "VNB", "TTN",
+        "HAX", "DRC", "CSM", "TMT", "SVC", "HTL",
+        "DAH", "RIC", "CTC", "DXL",
     }
 
     _MACRO_TICKERS = {
@@ -171,6 +419,178 @@ class DataCollector:
         self.fred_api_key = os.getenv("FRED_API_KEY")
         logger.info("DataCollector initialised | tickers=%s | market=%s | %s to %s",
                     self.tickers, self.market, self.start_date, self.end_date)
+
+    def _yf_symbol(self, ticker: str) -> str:
+        """Normalize local ticker to provider symbol for yfinance."""
+        t = (ticker or "").strip().upper()
+        if not t:
+            return t
+        if t in self._VN_TICKERS and not t.endswith(".VN"):
+            return f"{t}.VN"
+        return t
+
+    def _benchmark_candidates(self) -> list[str]:
+        """Return benchmark symbol candidates by market.
+
+        VNINDEX is not consistently available on yfinance, so keep fallbacks.
+        """
+        if self.market == "VN":
+            return ["^VNINDEX", "VNINDEX", "VNINDEX.VN", "^VNI"]
+        return ["^GSPC"]
+
+    def _build_vnindex_proxy(self) -> pd.DataFrame:
+        """Build a synthetic VNINDEX series from liquid VN large-cap constituents."""
+        close_series = []
+        used_components = []
+
+        for ticker in self._VN_BENCHMARK_PROXY_COMPONENTS:
+            symbol = self._yf_symbol(ticker)
+            try:
+                raw = yf.download(
+                    symbol,
+                    start=self.start_date,
+                    end=self.end_date,
+                    auto_adjust=True,
+                    progress=False,
+                )
+                if raw is None or raw.empty:
+                    continue
+
+                flat = self._flatten(raw)
+                if "date" not in flat.columns or "close" not in flat.columns:
+                    continue
+
+                s = (
+                    flat[["date", "close"]]
+                    .dropna(subset=["close"])
+                    .drop_duplicates(subset=["date"])
+                    .set_index("date")["close"]
+                    .sort_index()
+                    .rename(ticker)
+                )
+                if s.empty:
+                    continue
+
+                close_series.append(s)
+                used_components.append(ticker)
+            except Exception as e:
+                logger.warning("Proxy component fetch failed for %s (%s): %s", ticker, symbol, e)
+
+        if not close_series:
+            return pd.DataFrame()
+
+        closes = pd.concat(close_series, axis=1).sort_index().ffill()
+        returns = closes.pct_change().replace([np.inf, -np.inf], np.nan)
+        proxy_returns = returns.mean(axis=1, skipna=True)
+        proxy_returns = proxy_returns.fillna(0.0)
+
+        proxy_level = (1.0 + proxy_returns).cumprod() * 1000.0
+        benchmark_df = proxy_level.rename("close").to_frame().reset_index()
+        benchmark_df = benchmark_df.rename(columns={benchmark_df.columns[0]: "date"})
+        benchmark_df.insert(1, "ticker", "VNINDEX")
+        benchmark_df["volume"] = np.nan
+        benchmark_df = self._validate_df(benchmark_df, "benchmark_vnindex_proxy")
+
+        if benchmark_df.empty:
+            return benchmark_df
+
+        self._save_csv(benchmark_df, "benchmark_VNINDEX_PROXY.csv")
+        logger.warning(
+            "Using VNINDEX proxy benchmark built from %d components: %s",
+            len(used_components),
+            ", ".join(used_components),
+        )
+        return benchmark_df
+
+    def _fetch_vnindex_official(self) -> pd.DataFrame:
+        """Fetch VNINDEX EOD from vnstock (VCI source) as the primary VN benchmark."""
+        if VnQuote is None:
+            logger.warning("vnstock not available; skip official VNINDEX fetch.")
+            return pd.DataFrame()
+
+        try:
+            quote = VnQuote(symbol="VNINDEX", source="VCI")
+            raw = quote.history(start=self.start_date, end=self.end_date, interval="1D")
+            if raw is None or raw.empty:
+                return pd.DataFrame()
+
+            df = raw.copy()
+            rename_map = {
+                "time": "date",
+                "tradingDate": "date",
+            }
+            df = df.rename(columns=rename_map)
+            if "date" not in df.columns:
+                return pd.DataFrame()
+
+            if "volume" not in df.columns:
+                df["volume"] = np.nan
+
+            keep_cols = ["date", "open", "high", "low", "close", "volume"]
+            df = df[[c for c in keep_cols if c in df.columns]].copy()
+            df["date"] = pd.to_datetime(df["date"], errors="coerce")
+            start_ts = pd.to_datetime(self.start_date, errors="coerce")
+            end_ts = pd.to_datetime(self.end_date, errors="coerce")
+            if pd.notna(start_ts):
+                df = df[df["date"] >= start_ts]
+            if pd.notna(end_ts):
+                df = df[df["date"] <= end_ts]
+            df = df.dropna(subset=["date", "close"]).sort_values("date").reset_index(drop=True)
+            df.insert(1, "ticker", "VNINDEX")
+            df = self._validate_df(df, "benchmark_vnindex_official")
+            if df.empty:
+                return df
+
+            self._save_csv(df, "benchmark_VNINDEX_OFFICIAL.csv")
+            logger.info("Fetched %d rows for official VNINDEX benchmark (vnstock:VCI).", len(df))
+            return df
+        except Exception as e:
+            logger.error("Official VNINDEX fetch failed (vnstock:VCI): %s", e)
+            return pd.DataFrame()
+
+    def _fetch_vn_price_official(self, ticker: str) -> pd.DataFrame:
+        """Fetch VN ticker EOD from vnstock (VCI source) as a price fallback."""
+        if VnQuote is None:
+            logger.warning("vnstock not available; skip official price fetch for %s.", ticker)
+            return pd.DataFrame()
+
+        try:
+            quote = VnQuote(symbol=ticker, source="VCI")
+            raw = quote.history(start=self.start_date, end=self.end_date, interval="1D")
+            if raw is None or raw.empty:
+                return pd.DataFrame()
+
+            df = raw.copy()
+            rename_map = {"time": "date", "tradingDate": "date"}
+            df = df.rename(columns=rename_map)
+            if "date" not in df.columns:
+                return pd.DataFrame()
+
+            keep_cols = ["date", "open", "high", "low", "close", "volume"]
+            df = df[[c for c in keep_cols if c in df.columns]].copy()
+            df["date"] = pd.to_datetime(df["date"], errors="coerce")
+            start_ts = pd.to_datetime(self.start_date, errors="coerce")
+            end_ts = pd.to_datetime(self.end_date, errors="coerce")
+            if pd.notna(start_ts):
+                df = df[df["date"] >= start_ts]
+            if pd.notna(end_ts):
+                df = df[df["date"] <= end_ts]
+
+            df = df.dropna(subset=["date", "close"]).sort_values("date").reset_index(drop=True)
+            df.insert(1, "ticker", ticker)
+            df["adj_close"] = df["close"]
+            cols = ["date", "ticker", "open", "high", "low", "close", "adj_close", "volume"]
+            df = df[[c for c in cols if c in df.columns]].sort_values("date").reset_index(drop=True)
+            df = self._validate_df(df, f"{ticker}_price_vnstock")
+            if df.empty:
+                return df
+
+            self._save_csv(df, f"{ticker}_prices.csv")
+            logger.info("Fetched %d rows for %s from vnstock price fallback.", len(df), ticker)
+            return df
+        except Exception as e:
+            logger.error("vnstock price fetch failed for %s: %s", ticker, e)
+            return pd.DataFrame()
 
     def _get_news_search_terms(self, ticker: str) -> list[str]:
         ticker = ticker.upper()
@@ -286,10 +706,11 @@ class DataCollector:
         """
         data_map = {}
         for ticker in self.tickers:
-            logger.info("Fetching price data for %s ...", ticker)
+            symbol = self._yf_symbol(ticker)
+            logger.info("Fetching price data for %s (symbol=%s) ...", ticker, symbol)
             for attempt in range(1, 4):
                 try:
-                    raw = yf.download(ticker, start=self.start_date, end=self.end_date,
+                    raw = yf.download(symbol, start=self.start_date, end=self.end_date,
                                       auto_adjust=True, progress=False)
                     if raw is not None and not raw.empty:
                         df = self._flatten(raw)
@@ -302,37 +723,63 @@ class DataCollector:
                         self._save_csv(df, f"{ticker}_prices.csv")
                         logger.info("Fetched %d rows for %s.", len(df), ticker)
                     else:
-                        logger.warning("No price data for %s.", ticker)
+                        if ticker in self._VN_TICKERS:
+                            logger.warning("No yfinance price data for %s. Trying vnstock fallback ...", ticker)
+                            vn_df = self._fetch_vn_price_official(ticker)
+                            if vn_df is not None and not vn_df.empty:
+                                data_map[ticker] = vn_df
+                            else:
+                                logger.warning("No price data for %s after vnstock fallback.", ticker)
+                        else:
+                            logger.warning("No price data for %s.", ticker)
                     break
                 except Exception as e:
                     logger.error("Attempt %d/3 failed for %s: %s", attempt, ticker, e)
                     if attempt < 3:
                         time.sleep(3)
+                    elif ticker in self._VN_TICKERS:
+                        logger.warning("yfinance failed for %s after retries. Trying vnstock fallback ...", ticker)
+                        vn_df = self._fetch_vn_price_official(ticker)
+                        if vn_df is not None and not vn_df.empty:
+                            data_map[ticker] = vn_df
         return data_map
 
     def fetch_benchmark(self):
         """
-        Schema (benchmark_df): date, ticker, close, volume
-        GLOBAL -> ^GSPC | VN -> ^VNINDEX
+        Schema (benchmark_df): date, ticker, open, high, low, close, volume
+        GLOBAL -> ^GSPC | VN -> vnstock official VNINDEX, then yfinance candidates, then proxy
         """
-        symbol = self._BENCHMARK_TICKER.get(self.market, "^GSPC")
-        logger.info("Fetching benchmark %s for market=%s ...", symbol, self.market)
-        try:
-            raw = yf.download(symbol, start=self.start_date, end=self.end_date,
-                              auto_adjust=True, progress=False)
-            if raw is None or raw.empty:
-                return pd.DataFrame()
-            df = self._flatten(raw)
-            df.insert(1, "ticker", symbol)
-            df = df[[c for c in ["date", "ticker", "close", "volume"] if c in df.columns]]
-            df = df.sort_values("date").reset_index(drop=True)
-            df = self._validate_df(df, "benchmark_df")
-            self._save_csv(df, f"benchmark_{symbol.replace('^', '')}.csv")
-            logger.info("Fetched %d rows for benchmark %s.", len(df), symbol)
-            return df
-        except Exception as e:
-            logger.error("Failed benchmark %s: %s", symbol, e)
-            return pd.DataFrame()
+        if self.market == "VN":
+            official_df = self._fetch_vnindex_official()
+            if official_df is not None and not official_df.empty:
+                return official_df
+
+        for symbol in self._benchmark_candidates():
+            logger.info("Fetching benchmark %s for market=%s ...", symbol, self.market)
+            try:
+                raw = yf.download(symbol, start=self.start_date, end=self.end_date,
+                                  auto_adjust=True, progress=False)
+                if raw is None or raw.empty:
+                    continue
+                df = self._flatten(raw)
+                df.insert(1, "ticker", symbol)
+                df = df[[c for c in ["date", "ticker", "open", "high", "low", "close", "volume"] if c in df.columns]]
+                df = df.sort_values("date").reset_index(drop=True)
+                df = self._validate_df(df, "benchmark_df")
+                self._save_csv(df, f"benchmark_{symbol.replace('^', '')}.csv")
+                logger.info("Fetched %d rows for benchmark %s.", len(df), symbol)
+                return df
+            except Exception as e:
+                logger.error("Failed benchmark %s: %s", symbol, e)
+
+        if self.market == "VN":
+            proxy_df = self._build_vnindex_proxy()
+            if proxy_df is not None and not proxy_df.empty:
+                logger.info("Fetched %d rows for VNINDEX proxy benchmark.", len(proxy_df))
+                return proxy_df
+
+        logger.warning("No benchmark data available for market=%s from configured candidates.", self.market)
+        return pd.DataFrame()
 
     def fetch_peers(self, peers=None):
         """
@@ -348,7 +795,8 @@ class DataCollector:
         peer_map = {}
         for ticker in peers:
             try:
-                raw = yf.download(ticker, start=self.start_date, end=self.end_date,
+                symbol = self._yf_symbol(ticker)
+                raw = yf.download(symbol, start=self.start_date, end=self.end_date,
                                   auto_adjust=True, progress=False)
                 if raw is None or raw.empty:
                     continue
@@ -412,27 +860,237 @@ class DataCollector:
                 except Exception:
                     continue
 
-            dynamic = [ticker for _, ticker in sorted(scored, key=lambda x: x[0])][:5]
-            for ticker in fallback:
-                if ticker not in dynamic:
-                    dynamic.append(ticker)
-                if len(dynamic) >= 5:
-                    break
+            dynamic = [ticker for _, ticker in sorted(scored, key=lambda x: x[0])][:1]
+            if not dynamic:
+                for ticker in fallback:
+                    if ticker not in dynamic:
+                        dynamic.append(ticker)
+                    if len(dynamic) >= 1:
+                        break
             return dynamic
         except Exception as e:
             logger.warning("Dynamic peer resolution failed for %s: %s", primary, e)
             return fallback
 
+    @staticmethod
+    def _quarter_label_to_date(label: str) -> str | None:
+        text = str(label or "").strip().upper()
+        m = re.match(r"^(\d{4})-Q([1-4])$", text)
+        if not m:
+            return None
+        year = int(m.group(1))
+        quarter = int(m.group(2))
+        month = quarter * 3
+        period = pd.Period(f"{year}-{month:02d}", freq="M")
+        return period.end_time.strftime("%Y-%m-%d")
+
+    @staticmethod
+    def _statement_date_columns(df: pd.DataFrame) -> list[str]:
+        if df is None or df.empty:
+            return []
+        cols: list[str] = []
+        for c in df.columns:
+            if re.match(r"^\d{4}-Q[1-4]$", str(c).strip().upper()):
+                cols.append(str(c))
+        return cols
+
+    @staticmethod
+    def _pick_statement_row(df: pd.DataFrame, keywords: list[str]) -> pd.Series:
+        if df is None or df.empty:
+            return pd.Series(dtype=float)
+        source_col = "item_en" if "item_en" in df.columns else ("item" if "item" in df.columns else None)
+        if source_col is None:
+            return pd.Series(dtype=float)
+
+        raw = df[source_col].fillna("").astype(str).str.lower()
+        for kw in keywords:
+            mask = raw.str.contains(kw.lower(), regex=False)
+            if mask.any():
+                return df.loc[mask].iloc[0]
+        return pd.Series(dtype=float)
+
+    def _row_to_timeseries(self, row: pd.Series, date_cols: list[str]) -> dict[str, float | None]:
+        if row is None or row.empty:
+            return {}
+        out: dict[str, float | None] = {}
+        for c in date_cols:
+            date_key = self._quarter_label_to_date(c)
+            if not date_key:
+                continue
+            val = pd.to_numeric(pd.Series([row.get(c)]), errors="coerce").iloc[0]
+            out[date_key] = float(val) if pd.notna(val) else None
+        return out
+
+    def _build_fundamental_from_vnstock(self, ticker: str, info: dict | None = None) -> pd.DataFrame:
+        if VnFinance is None:
+            return pd.DataFrame()
+
+        try:
+            fin = VnFinance(source="VCI", symbol=ticker, period="quarter", get_all=False, show_log=False)
+            income = fin.income_statement()
+            balance = fin.balance_sheet()
+            cash_flow = fin.cash_flow()
+        except Exception as e:
+            logger.warning("vnstock fundamental fetch failed for %s: %s", ticker, e)
+            return pd.DataFrame()
+
+        date_cols = sorted(
+            set(self._statement_date_columns(income))
+            | set(self._statement_date_columns(balance))
+            | set(self._statement_date_columns(cash_flow))
+        )
+        if not date_cols:
+            logger.warning("vnstock returned no quarterly columns for %s", ticker)
+            return pd.DataFrame()
+
+        mapped = {
+            "revenue": self._row_to_timeseries(self._pick_statement_row(income, ["net sales", "sales"]), date_cols),
+            "gross_profit": self._row_to_timeseries(self._pick_statement_row(income, ["gross profit"]), date_cols),
+            "operating_profit": self._row_to_timeseries(self._pick_statement_row(income, ["operating profit"]), date_cols),
+            "net_income": self._row_to_timeseries(self._pick_statement_row(income, ["net profit/(loss) after tax", "net profit"]), date_cols),
+            "interest_expense": self._row_to_timeseries(self._pick_statement_row(income, ["interest expenses", "interest expense"]), date_cols),
+            "pre_tax_income": self._row_to_timeseries(self._pick_statement_row(income, ["before tax"]), date_cols),
+            "income_tax_expense": self._row_to_timeseries(self._pick_statement_row(income, ["income tax expenses", "corporate income tax"]), date_cols),
+            "cogs": self._row_to_timeseries(self._pick_statement_row(income, ["cost of sales"]), date_cols),
+            "total_assets": self._row_to_timeseries(self._pick_statement_row(balance, ["total assets"]), date_cols),
+            "equity": self._row_to_timeseries(self._pick_statement_row(balance, ["owner's equity", "owners equity"]), date_cols),
+            "total_debt": self._row_to_timeseries(self._pick_statement_row(balance, ["total debt", "borrowings"]), date_cols),
+            "cash": self._row_to_timeseries(self._pick_statement_row(balance, ["cash and cash equivalents", "cash equivalents", "cash"]), date_cols),
+            "current_assets": self._row_to_timeseries(self._pick_statement_row(balance, ["current assets"]), date_cols),
+            "current_liabilities": self._row_to_timeseries(self._pick_statement_row(balance, ["current liabilities"]), date_cols),
+            "accounts_receivable": self._row_to_timeseries(self._pick_statement_row(balance, ["accounts receivable", "trade accounts receivable", "receivables"]), date_cols),
+            "inventory": self._row_to_timeseries(self._pick_statement_row(balance, ["inventories", "inventory"]), date_cols),
+            "accounts_payable": self._row_to_timeseries(self._pick_statement_row(balance, ["trade accounts payable", "payables"]), date_cols),
+            "retained_earnings": self._row_to_timeseries(self._pick_statement_row(balance, ["undistributed earnings", "retained earnings"]), date_cols),
+            "operating_cash_flow": self._row_to_timeseries(self._pick_statement_row(cash_flow, ["operating activities"]), date_cols),
+            "capex": self._row_to_timeseries(self._pick_statement_row(cash_flow, ["purchases of fixed assets", "fixed assets and other long term assets"]), date_cols),
+        }
+
+        all_dates = sorted({d for values in mapped.values() for d in values.keys()})
+        rows = []
+        for date in all_dates:
+            revenue = mapped["revenue"].get(date)
+            net_income = mapped["net_income"].get(date)
+            total_assets = mapped["total_assets"].get(date)
+            equity = mapped["equity"].get(date)
+            total_debt = mapped["total_debt"].get(date)
+
+            if revenue is None and net_income is None and total_assets is None and equity is None:
+                continue
+
+            roe = (net_income / equity) if (net_income is not None and equity not in (None, 0)) else None
+            roa = (net_income / total_assets) if (net_income is not None and total_assets not in (None, 0)) else None
+            margin = (net_income / revenue) if (net_income is not None and revenue not in (None, 0)) else None
+            debt_to_equity = (total_debt / equity) if (total_debt is not None and equity not in (None, 0)) else None
+
+            rows.append({
+                "date": date,
+                "ticker": ticker,
+                "revenue": revenue,
+                "gross_profit": mapped["gross_profit"].get(date),
+                "operating_profit": mapped["operating_profit"].get(date),
+                "net_income": net_income,
+                "total_assets": total_assets,
+                "equity": equity,
+                "total_debt": total_debt,
+                "cash": mapped["cash"].get(date),
+                "operating_cash_flow": mapped["operating_cash_flow"].get(date),
+                "capex": mapped["capex"].get(date),
+                "accounts_receivable": mapped["accounts_receivable"].get(date),
+                "inventory": mapped["inventory"].get(date),
+                "accounts_payable": mapped["accounts_payable"].get(date),
+                "cogs": mapped["cogs"].get(date),
+                "income_tax_expense": mapped["income_tax_expense"].get(date),
+                "pre_tax_income": mapped["pre_tax_income"].get(date),
+                "current_assets": mapped["current_assets"].get(date),
+                "current_liabilities": mapped["current_liabilities"].get(date),
+                "retained_earnings": mapped["retained_earnings"].get(date),
+                "interest_expense": mapped["interest_expense"].get(date),
+                "ebitda": None,
+                "roe": roe,
+                "roa": roa,
+                "margin": margin,
+                "debt_to_equity": debt_to_equity,
+                "shares_outstanding": None,
+                "bvps": None,
+                "eps": None,
+            })
+
+        if not rows:
+            return pd.DataFrame()
+
+        df = pd.DataFrame(rows).sort_values("date").reset_index(drop=True)
+
+        info = info or {}
+        def _info_float(key: str) -> float | None:
+            val = info.get(key)
+            return float(val) if val is not None else None
+
+        df["pe"] = _info_float("trailingPE")
+        df["pb"] = _info_float("priceToBook")
+        df["dividend"] = _info_float("dividendRate")
+        df["market_cap"] = _info_float("marketCap")
+
+        cols = [
+            "date", "ticker",
+            "revenue", "gross_profit", "operating_profit", "net_income", "eps",
+            "total_assets", "total_liabilities", "equity", "total_debt", "cash", "operating_cash_flow",
+            "capex", "accounts_receivable", "inventory", "accounts_payable", "cogs",
+            "short_term_investments", "income_tax_expense", "pre_tax_income",
+            "current_assets", "current_liabilities", "retained_earnings", "interest_expense", "ebitda", "market_cap",
+            "roe", "roa", "pe", "pb", "margin", "debt_to_equity",
+            "shares_outstanding", "bvps", "dividend",
+        ]
+        return df[[c for c in cols if c in df.columns]]
+
+    @staticmethod
+    def _merge_fundamental_frames(primary: pd.DataFrame, secondary: pd.DataFrame) -> pd.DataFrame:
+        if primary is None or primary.empty:
+            return secondary.copy() if secondary is not None else pd.DataFrame()
+        if secondary is None or secondary.empty:
+            return primary.copy()
+
+        p = primary.copy()
+        s = secondary.copy()
+        p["date"] = pd.to_datetime(p["date"], errors="coerce")
+        s["date"] = pd.to_datetime(s["date"], errors="coerce")
+
+        key_cols = ["date", "ticker"]
+        all_cols = sorted(set(p.columns) | set(s.columns))
+        merged = p[key_cols].drop_duplicates().merge(s[key_cols].drop_duplicates(), on=key_cols, how="outer")
+        for col in all_cols:
+            if col in key_cols:
+                continue
+            p_col = p[[*key_cols, col]] if col in p.columns else pd.DataFrame(columns=[*key_cols, col])
+            s_col = s[[*key_cols, col]] if col in s.columns else pd.DataFrame(columns=[*key_cols, col])
+            tmp = merged.merge(p_col, on=key_cols, how="left", suffixes=("", "_p"))
+            tmp = tmp.merge(s_col, on=key_cols, how="left", suffixes=("_p", "_s"))
+            val_p = f"{col}_p" if f"{col}_p" in tmp.columns else col
+            val_s = f"{col}_s" if f"{col}_s" in tmp.columns else col
+            merged[col] = tmp[val_p].combine_first(tmp[val_s])
+
+        merged = merged.sort_values("date").reset_index(drop=True)
+        merged["date"] = pd.to_datetime(merged["date"], errors="coerce").dt.strftime("%Y-%m-%d")
+        return merged
+
     def fetch_financial_statements(self):
         result = {}
         for ticker in self.tickers:
-            logger.info("Fetching financial statements for %s ...", ticker)
-            t = yf.Ticker(ticker)
-            income  = t.quarterly_financials
+            symbol = self._yf_symbol(ticker)
+            logger.info("Fetching financial statements for %s (symbol=%s) ...", ticker, symbol)
+            t = yf.Ticker(symbol)
+            income = t.quarterly_financials
             balance = t.quarterly_balance_sheet
             cash_flow = t.quarterly_cashflow
-            info    = t.info
-            df = self._build_fundamental(income, balance, cash_flow, info, ticker)
+            info = t.info
+            df_yf = self._build_fundamental(income, balance, cash_flow, info, ticker)
+
+            df_vn = pd.DataFrame()
+            if ticker in self._VN_TICKERS:
+                logger.info("Applying VN fundamental fallback order for %s: yfinance -> vnstock -> merge", ticker)
+                df_vn = self._build_fundamental_from_vnstock(ticker=ticker, info=info)
+
+            df = self._merge_fundamental_frames(df_yf, df_vn)
             df = self._validate_df(df, f"{ticker}_fundamental")
             result[ticker] = df
             self._save_csv(df, f"{ticker}_fundamental.csv")
@@ -467,13 +1125,17 @@ class DataCollector:
             
             rev = _v(_row(income, "Total Revenue"))
             net_inc = _v(_row(income, "Net Income"))
+            ebit = _v(_row(income, "EBIT", "Operating Income", "Total Operating Income As Reported"))
+            pretax_income = _v(_row(income, "Pretax Income", "Income Before Tax"))
             assets = _v(_row(balance, "Total Assets"))
             equity = _v(_row(balance, "Stockholders Equity", "Common Stock Equity"))
             debt = _v(_row(balance, "Total Debt"))
             current_assets = _v(_row(balance, "Current Assets"))
             current_liabilities = _v(_row(balance, "Current Liabilities"))
             retained_earnings = _v(_row(balance, "Retained Earnings"))
-            interest_expense = _v(_row(income, "Interest Expense"))
+            interest_expense = _v(_row(income, "Interest Expense", "Interest Expenses", "Interest Expense And Other"))
+            if interest_expense is None and ebit is not None and pretax_income is not None:
+                interest_expense = abs(ebit - pretax_income)
             ebitda = _v(_row(income, "EBITDA"))
             
             if rev is None and net_inc is None and assets is None and equity is None:
@@ -784,7 +1446,8 @@ class DataCollector:
 
         for ticker in peers:
             try:
-                t = yf.Ticker(ticker)
+                symbol = self._yf_symbol(ticker)
+                t = yf.Ticker(symbol)
                 inc = t.quarterly_financials
                 bal = t.quarterly_balance_sheet
 
@@ -877,9 +1540,10 @@ class DataCollector:
         """
         data_map = {}
         for ticker in self.tickers:
-            logger.info("Fetching intraday %s for %s (period=%s)...", interval, ticker, period)
+            symbol = self._yf_symbol(ticker)
+            logger.info("Fetching intraday %s for %s (symbol=%s, period=%s)...", interval, ticker, symbol, period)
             try:
-                raw = yf.download(ticker, period=period, interval=interval,
+                raw = yf.download(symbol, period=period, interval=interval,
                                   auto_adjust=True, progress=False)
                 if raw is None or raw.empty:
                     logger.warning("No intraday data for %s.", ticker)

@@ -384,71 +384,221 @@ class DataVisualizer:
         self._save_figure(fig, filename_stub, save)
         logger.info("Saved price trend chart -> %s", self.output_dir / f"{filename_stub}.html")
 
-    def correlation_heatmap(
+    def _returns_series(self, frame: pd.DataFrame) -> pd.Series:
+        if "daily_return" in frame.columns:
+            returns = pd.to_numeric(frame["daily_return"], errors="coerce")
+        elif "close" in frame.columns:
+            close = pd.to_numeric(frame["close"], errors="coerce")
+            returns = close.pct_change()
+        else:
+            return pd.Series(dtype=float)
+        return returns.replace([np.inf, -np.inf], np.nan)
+
+    def indicator_correlation_heatmap(
         self,
-        ticker: Optional[str] = None,
-        columns: Optional[list[str]] = None,
+        ticker_a: str,
+        ticker_b: Optional[str] = None,
+        benchmark_df: Optional[pd.DataFrame] = None,
+        benchmark_label: str = "Benchmark",
+        min_periods: int = 8,
         save: bool = True,
-    ) -> None:
-        """
-        Plot a correlation matrix heatmap across selected indicators.
+    ) -> Optional[go.Figure]:
+        """Correlation heatmap across selected indicators for A/B/Benchmark."""
+        if ticker_a not in self.data:
+            return None
 
-        Parameters
-        ----------
-        ticker : str, optional
-            Ticker to visualise. Defaults to the first ticker in self.data.
-        columns : list[str], optional
-            Specific indicator columns to include.
-            Defaults to a curated set of technical and return indicators.
-        save : bool
-            Whether to export the figure to output_dir.
-
-        Notes
-        -----
-        Uses Plotly heatmap with correlation values annotated in each cell.
-        """
-        if not self.data:
-            raise ValueError("No data available for correlation heatmap")
-
-        selected_ticker = ticker or next(iter(self.data.keys()))
-        df = self._get_ticker_frame(selected_ticker)
-
-        default_columns = [
-            "daily_return",
-            "log_return",
-            "rsi_14",
-            "macd_line",
-            "macd_signal",
-            "stoch_k",
-            "stoch_d",
-            "adx_14",
-            "williams_r_14",
-            "cci_14",
-            "ultimate_oscillator",
-            "roc_12",
-            "atr_14",
-            "beta",
-            "sharpe_ratio",
-            "relative_strength",
-            "volume",
+        # User-configured view: use primary ticker only; concise Trend/Return signals.
+        indicator_specs = [
+            ("trend", "daily_ret", "daily_return", "DRET"),
+            ("trend", "log_ret", "log_return", "LRET"),
+            ("trend", "volume", "volume", "VOL"),
+            ("osc", "ma20", "ma20", "MA20"),
+            ("osc", "ma50", "ma50", "MA50"),
+            ("osc", "ma200", "ma200", "MA200"),
+            ("osc", "rsi", "rsi_14", "RSI"),
+            ("osc", "macd", "macd_line", "MACD"),
+            ("risk", "hv30", "volatility_30", "HV30"),
+            ("risk", "hv60", "volatility_60", "HV60"),
+            ("risk", "beta", "beta", "BETA"),
+            ("risk", "var95", "var_95", "VaR95"),
+            ("risk", "var99", "var_99", "VaR99"),
+            ("risk", "max_dd", "max_drawdown", "MDD"),
+            ("risk", "sharpe", "sharpe_ratio", "SHRP"),
         ]
+        indicator_groups = {
+            "trend": "TR",
+            "osc": "OSC",
+            "risk": "RK",
+        }
 
-        selected_columns = columns or default_columns
-        available_columns = [c for c in selected_columns if c in df.columns]
-        if len(available_columns) < 2:
-            raise ValueError(
-                f"Ticker '{selected_ticker}' does not have enough indicator columns for correlation heatmap"
-            )
+        def _ensure_indicator_columns(work: pd.DataFrame) -> pd.DataFrame:
+            out = work.copy()
+            if "daily_return" not in out.columns and "close" in out.columns:
+                close = pd.to_numeric(out["close"], errors="coerce")
+                out["daily_return"] = close.pct_change()
+            if "log_return" not in out.columns and "close" in out.columns:
+                close = pd.to_numeric(out["close"], errors="coerce")
+                out["log_return"] = np.log(close / close.shift(1))
 
-        numeric = df[available_columns].apply(pd.to_numeric, errors="coerce")
-        valid_columns = [c for c in numeric.columns if numeric[c].notna().sum() >= 8]
-        if len(valid_columns) < 2:
-            raise ValueError(
-                f"Ticker '{selected_ticker}' has insufficient non-null indicator data for heatmap"
-            )
+            if "close" in out.columns:
+                close = pd.to_numeric(out["close"], errors="coerce")
+                if "cum_return_7" not in out.columns:
+                    out["cum_return_7"] = close / close.shift(7) - 1
+                if "cum_return_30" not in out.columns:
+                    out["cum_return_30"] = close / close.shift(30) - 1
+                if "cum_return_90" not in out.columns:
+                    out["cum_return_90"] = close / close.shift(90) - 1
+                if "cum_return_ytd" not in out.columns:
+                    year = pd.to_datetime(out["date"], errors="coerce").dt.year
+                    first_close_of_year = close.groupby(year).transform("first")
+                    out["cum_return_ytd"] = close / first_close_of_year - 1
+                if "ma20" not in out.columns:
+                    out["ma20"] = close.rolling(20).mean()
+                if "ma50" not in out.columns:
+                    out["ma50"] = close.rolling(50).mean()
+                if "ma200" not in out.columns:
+                    out["ma200"] = close.rolling(200).mean()
+                if "max_drawdown" not in out.columns:
+                    rolling_max = close.cummax()
+                    drawdown = (close - rolling_max) / rolling_max
+                    out["max_drawdown"] = drawdown.cummin()
 
-        corr = numeric[valid_columns].corr(method="pearson", min_periods=8).round(2)
+            if "daily_return" in out.columns:
+                ret = pd.to_numeric(out["daily_return"], errors="coerce")
+                if "volatility_30" not in out.columns:
+                    out["volatility_30"] = ret.rolling(30).std()
+                if "volatility_60" not in out.columns:
+                    out["volatility_60"] = ret.rolling(60).std()
+                if "var_95" not in out.columns:
+                    out["var_95"] = ret.rolling(252, min_periods=252).quantile(0.05)
+                if "var_99" not in out.columns:
+                    out["var_99"] = ret.rolling(252, min_periods=252).quantile(0.01)
 
+                if "sharpe_ratio" not in out.columns:
+                    rolling_mean = ret.rolling(252, min_periods=252).mean()
+                    rolling_std = ret.rolling(252, min_periods=252).std()
+                    annualized_return = rolling_mean * 252
+                    annualized_volatility = rolling_std * np.sqrt(252)
+                    out["sharpe_ratio"] = (annualized_return / annualized_volatility.replace(0, np.nan)).replace([np.inf, -np.inf], np.nan)
+
+            if "beta" not in out.columns and "ticker" in out.columns:
+                ticker_values = out["ticker"].dropna().astype(str).str.upper().unique()
+                if len(ticker_values) == 1 and ticker_values[0] in {"^VNINDEX", "VNINDEX", "^GSPC"}:
+                    out["beta"] = 1.0
+
+            return out
+
+        def _frame_to_indicator_columns(frame: pd.DataFrame, label: str) -> pd.DataFrame:
+            work = frame.copy()
+            work["date"] = pd.to_datetime(work["date"], errors="coerce")
+            work = work.dropna(subset=["date"]).sort_values("date")
+            work = _ensure_indicator_columns(work)
+            out = pd.DataFrame({"date": work["date"]})
+            for group, alias, col, short in indicator_specs:
+                if col in work.columns:
+                    series = work[col]
+                    if series.dtype == bool:
+                        values = series.astype(int)
+                    else:
+                        values = pd.to_numeric(series, errors="coerce")
+                    out[f"{label}|{indicator_groups[group]}:{short}"] = values
+            return out
+
+        frame_a = self._get_ticker_frame(ticker_a)
+        merged = _frame_to_indicator_columns(frame_a, ticker_a)
+        labels: list[str] = [ticker_a]
+        if merged.empty:
+            return None
+
+        numeric = merged.drop(columns=["date"]).apply(pd.to_numeric, errors="coerce")
+        valid_cols = [c for c in numeric.columns if numeric[c].notna().sum() >= min_periods]
+        if len(valid_cols) < 2:
+            return None
+
+        corr = numeric[valid_cols].corr(method="pearson", min_periods=min_periods).round(2)
+
+        axis_labels = [
+            col.replace("|", "<br>").replace(":", " ")
+            for col in corr.columns
+        ]
+        n_cols = len(corr.columns)
+        text_size = 8 if n_cols <= 36 else 6
+
+        fig = go.Figure(
+            data=[
+                go.Heatmap(
+                    z=corr.values,
+                    x=axis_labels,
+                    y=axis_labels,
+                    zmin=-1,
+                    zmax=1,
+                    colorscale=[[0.0, "#1e3a8a"], [0.5, "#0f172a"], [1.0, "#b91c1c"]],
+                    text=corr.values,
+                    texttemplate="%{text:.2f}",
+                    textfont=dict(size=text_size, color="#e2e8f0"),
+                    hovertemplate="%{y} vs %{x}<br>Correlation: %{z:.2f}<extra></extra>",
+                    colorbar=dict(title="Corr"),
+                )
+            ]
+        )
+        fig.update_layout(
+            title=dict(
+                text=f"Asset Indicator Correlation: {' vs '.join(labels)}",
+                x=0.02,
+                xanchor="left",
+            ),
+            template="plotly_dark",
+            paper_bgcolor="#0b1220",
+            plot_bgcolor="#0f172a",
+            font=dict(family="Inter, Segoe UI, Arial, sans-serif", color="#e2e8f0", size=11),
+            margin=dict(l=160, r=70, t=80, b=150),
+            height=max(820, min(1500, 24 * n_cols)),
+        )
+        fig.update_xaxes(tickangle=-45, side="bottom")
+        fig.update_yaxes(autorange="reversed")
+
+        filename_stub = "portfolio_indicator_correlation"
+        self._save_figure(fig, filename_stub, save)
+        logger.info("Saved indicator correlation heatmap -> %s", self.output_dir / f"{filename_stub}.html")
+        return fig
+
+    def asset_return_correlation_heatmap(
+        self,
+        ticker_a: str,
+        ticker_b: str,
+        benchmark_df: Optional[pd.DataFrame] = None,
+        benchmark_label: str = "Benchmark",
+        min_periods: int = 8,
+        save: bool = True,
+    ) -> Optional[go.Figure]:
+        """Correlation matrix of aligned daily returns for A/B/Benchmark."""
+        if ticker_a not in self.data or ticker_b not in self.data:
+            return None
+
+        frame_a = self._get_ticker_frame(ticker_a)
+        frame_b = self._get_ticker_frame(ticker_b)
+
+        ret_a = pd.DataFrame({"date": frame_a["date"], ticker_a: self._returns_series(frame_a)})
+        ret_b = pd.DataFrame({"date": frame_b["date"], ticker_b: self._returns_series(frame_b)})
+        merged = ret_a.merge(ret_b, on="date", how="inner")
+
+        if benchmark_df is not None and not benchmark_df.empty and "date" in benchmark_df.columns:
+            bm = benchmark_df.copy()
+            bm["date"] = pd.to_datetime(bm["date"], errors="coerce")
+            bm = bm.dropna(subset=["date"]).sort_values("date")
+            ret_bm = pd.DataFrame({"date": bm["date"], benchmark_label: self._returns_series(bm)})
+            merged = merged.merge(ret_bm, on="date", how="inner")
+
+        merged = merged.replace([np.inf, -np.inf], np.nan).dropna(how="all")
+        if merged.empty:
+            return None
+
+        numeric = merged.drop(columns=["date"]).apply(pd.to_numeric, errors="coerce")
+        valid_cols = [c for c in numeric.columns if numeric[c].notna().sum() >= min_periods]
+        if len(valid_cols) < 2:
+            return None
+
+        corr = numeric[valid_cols].corr(method="pearson", min_periods=min_periods).round(2)
         fig = go.Figure(
             data=[
                 go.Heatmap(
@@ -457,40 +607,38 @@ class DataVisualizer:
                     y=corr.index,
                     zmin=-1,
                     zmax=1,
-                    colorscale=[
-                        [0.0, "#1e3a8a"],
-                        [0.5, "#0f172a"],
-                        [1.0, "#b91c1c"],
-                    ],
-                    colorbar=dict(
-                        title="Corr",
-                        ticks="outside",
-                        tickvals=[-1, -0.5, 0, 0.5, 1],
-                        ticktext=["-1.0", "-0.5", "0", "0.5", "1.0"],
-                    ),
+                    colorscale=[[0.0, "#1e3a8a"], [0.5, "#0f172a"], [1.0, "#b91c1c"]],
                     text=corr.values,
                     texttemplate="%{text:.2f}",
-                    textfont=dict(size=10, color="#e2e8f0"),
                     hovertemplate="%{y} vs %{x}<br>Correlation: %{z:.2f}<extra></extra>",
                 )
             ]
         )
-
         fig.update_layout(
-            title=dict(text=f"{selected_ticker} Correlation Heatmap (Selected Indicators)", x=0.02, xanchor="left"),
+            title=dict(text=f"Asset Return Correlation: {ticker_a} vs {ticker_b}", x=0.02, xanchor="left"),
             template="plotly_dark",
             paper_bgcolor="#0b1220",
             plot_bgcolor="#0f172a",
             font=dict(family="Inter, Segoe UI, Arial, sans-serif", color="#e2e8f0", size=12),
-            margin=dict(l=120, r=70, t=70, b=120),
-            height=760,
+            margin=dict(l=110, r=60, t=70, b=80),
+            height=520,
         )
-        fig.update_xaxes(tickangle=-35, side="bottom")
         fig.update_yaxes(autorange="reversed")
-
-        filename_stub = f"{selected_ticker.lower()}_correlation_heatmap"
+        filename_stub = "portfolio_asset_correlation"
         self._save_figure(fig, filename_stub, save)
-        logger.info("Saved correlation heatmap -> %s", self.output_dir / f"{filename_stub}.html")
+        logger.info("Saved asset return correlation heatmap -> %s", self.output_dir / f"{filename_stub}.html")
+        return fig
+
+    def correlation_heatmap(
+        self,
+        ticker: Optional[str] = None,
+        columns: Optional[list[str]] = None,
+        save: bool = True,
+    ) -> None:
+        """Backward-compatible wrapper used by current app flows."""
+        _ = columns
+        selected_ticker = ticker or next(iter(self.data.keys()))
+        self.indicator_correlation_heatmap(ticker_a=selected_ticker, save=save)
 
     def returns_distribution(
         self,
@@ -946,6 +1094,7 @@ class DataVisualizer:
                 if {"close", "volume"}.issubset(df.columns):
                     for tf in timeframes:
                         self.price_trend_chart(ticker=ticker, chart_type=chart_type, timeframe=tf, save=True)
+                    self.returns_distribution(tickers=[ticker], plot_type="both", save=True)
                     if include_rolling:
                         self.rolling_stats_chart(ticker=ticker, save=True)
             except Exception as exc:
@@ -1067,9 +1216,9 @@ class DataVisualizer:
                 _tech(ticker_a, "sharpe_ratio") or 0,
                 _tech(ticker_b, "sharpe_ratio") or 0,
             ),
-            "Volatility 20d (%)": (
-                (_tech(ticker_a, "volatility_20") or 0) * 100,
-                (_tech(ticker_b, "volatility_20") or 0) * 100,
+            "Volatility 30d (%)": (
+                (_tech(ticker_a, "volatility_30") or 0) * 100,
+                (_tech(ticker_b, "volatility_30") or 0) * 100,
             ),
             "Beta": (
                 _tech(ticker_a, "beta") or 0,
@@ -1201,16 +1350,16 @@ class DataVisualizer:
         benchmark_label: str = "VNI",
         save: bool = True,
     ) -> Optional[go.Figure]:
-        def _series_from_ticker(ticker: str) -> Optional[pd.DataFrame]:
+        def _return_series_from_ticker(ticker: str) -> Optional[pd.DataFrame]:
             if ticker not in self.data:
                 return None
             try:
                 frame = self._get_ticker_frame(ticker)
             except Exception:
                 return None
-            return _series_from_frame(frame, ticker)
+            return _return_series_from_frame(frame, ticker)
 
-        def _series_from_frame(frame: Optional[pd.DataFrame], label: str) -> Optional[pd.DataFrame]:
+        def _return_series_from_frame(frame: Optional[pd.DataFrame], label: str) -> Optional[pd.DataFrame]:
             if frame is None or frame.empty or "date" not in frame.columns:
                 return None
 
@@ -1228,14 +1377,14 @@ class DataVisualizer:
             else:
                 return None
 
-            out = pd.DataFrame({"date": work["date"], "ret": returns})
-            out["ret"] = out["ret"].fillna(0.0)
-            out[label] = (1.0 + out["ret"]).cumprod() - 1.0
-            return out[["date", label]]
+            out = pd.DataFrame({"date": work["date"], label: returns})
+            out[label] = pd.to_numeric(out[label], errors="coerce").fillna(0.0)
+            return out
 
-        s_a = _series_from_ticker(ticker_a)
-        s_b = _series_from_ticker(ticker_b)
-        s_benchmark = _series_from_frame(benchmark_df, benchmark_label)
+        s_a = _return_series_from_ticker(ticker_a)
+        s_b = _return_series_from_ticker(ticker_b)
+        s_benchmark = _return_series_from_frame(benchmark_df, benchmark_label)
+        has_benchmark = s_benchmark is not None
 
         series = [s for s in [s_a, s_b, s_benchmark] if s is not None]
         if len(series) < 2:
@@ -1246,6 +1395,10 @@ class DataVisualizer:
             merged = merged.merge(s, on="date", how="inner")
         if merged.empty:
             return None
+
+        ret_cols = [c for c in merged.columns if c != "date"]
+        for col in ret_cols:
+            merged[col] = (1.0 + merged[col]).cumprod() - 1.0
 
         fig = go.Figure()
         palette = {
@@ -1269,7 +1422,7 @@ class DataVisualizer:
         fig.add_hline(y=0, line_width=1, line_dash="solid", line_color="rgba(148,163,184,0.5)")
         fig.update_layout(
             title=dict(
-                text=f"Performance Chart: {ticker_a} vs {ticker_b} vs {benchmark_label}",
+                text=f"Performance Chart: {ticker_a} vs {ticker_b}" + (f" vs {benchmark_label}" if has_benchmark else ""),
                 x=0.02,
                 xanchor="left",
             ),
@@ -1289,7 +1442,7 @@ class DataVisualizer:
             ),
         )
 
-        stub = f"performance_{ticker_a.lower()}_vs_{ticker_b.lower()}"
+        stub = "portfolio_cumulative_performance"
         self._save_figure(fig, stub, save)
         logger.info("Saved performance chart -> %s", self.output_dir / f"{stub}.html")
         return fig
@@ -1299,144 +1452,110 @@ class DataVisualizer:
         ticker_a: str,
         ticker_b: str,
         all_price_dfs: Optional[dict[str, pd.DataFrame]] = None,
+        n_portfolios: int = 5000,
+        risk_free_rate: float = 0.03,
         save: bool = True,
     ) -> go.Figure:
-        """
-        Plot the 2-stock efficient frontier (Stock A + Stock B) plus individual
-        stock risk-return scatter for all available tickers.
-
-        Parameters
-        ----------
-        ticker_a, ticker_b : str
-            The two tickers to highlight as Stock A / Stock B.
-        all_price_dfs : dict, optional
-            Mapping of ticker -> price DataFrame for ALL tickers to plot as background dots.
-            Defaults to self.data.
-        save : bool
-            Whether to save the figure to output_dir.
-        """
+        """Random-portfolio efficient frontier for Stock A and Stock B."""
         price_dfs = all_price_dfs or self.data
+        if ticker_a not in price_dfs or ticker_b not in price_dfs:
+            raise ValueError("Both ticker_a and ticker_b must exist in provided price data")
 
-        points: dict[str, dict] = {}
-        for t, df in price_dfs.items():
-            if df is None or df.empty:
-                continue
-            try:
-                frame = df.copy()
-                frame["date"] = pd.to_datetime(frame["date"], errors="coerce")
-                frame = frame.dropna(subset=["date"]).sort_values("date")
-                if "daily_return" in frame.columns:
-                    rets = pd.to_numeric(frame["daily_return"], errors="coerce").dropna()
-                elif "close" in frame.columns:
-                    rets = frame["close"].pct_change().dropna()
-                else:
-                    continue
-                rets = rets.replace([np.inf, -np.inf], np.nan).dropna()
-                if len(rets) < 10:
-                    continue
-                ann_ret = float(rets.mean() * 252)
-                ann_vol = float(rets.std() * np.sqrt(252))
-                points[t] = {"return": ann_ret, "vol": ann_vol, "n": len(rets)}
-            except Exception:
-                continue
+        df_a = self._get_ticker_frame(ticker_a)
+        df_b = self._get_ticker_frame(ticker_b)
+        ra = self._returns_series(df_a)
+        rb = self._returns_series(df_b)
+        aligned = pd.DataFrame({"date": df_a["date"], ticker_a: ra}).merge(
+            pd.DataFrame({"date": df_b["date"], ticker_b: rb}),
+            on="date",
+            how="inner",
+        )
+        aligned = aligned.replace([np.inf, -np.inf], np.nan).dropna(subset=[ticker_a, ticker_b])
+        if len(aligned) < 10:
+            raise ValueError("Insufficient aligned return observations for efficient frontier")
+
+        ret_matrix = aligned[[ticker_a, ticker_b]].to_numpy(dtype=float)
+        mean_returns = ret_matrix.mean(axis=0) * 252
+        cov_matrix = np.cov(ret_matrix.T) * 252
+
+        rng = np.random.default_rng(42)
+        weights_a = rng.random(n_portfolios)
+        weights_b = 1.0 - weights_a
+        weights = np.column_stack([weights_a, weights_b])
+
+        port_returns = weights @ mean_returns
+        port_vols = np.sqrt(np.einsum("ij,jk,ik->i", weights, cov_matrix, weights))
+        sharpe = (port_returns - risk_free_rate) / np.where(port_vols == 0, np.nan, port_vols)
+
+        idx_max_sharpe = int(np.nanargmax(sharpe))
+        idx_min_vol = int(np.nanargmin(port_vols))
 
         fig = go.Figure()
-
-        bg_tickers = [t for t in points if t not in (ticker_a, ticker_b)]
-        if bg_tickers:
-            fig.add_trace(
-                go.Scatter(
-                    x=[points[t]["vol"] for t in bg_tickers],
-                    y=[points[t]["return"] for t in bg_tickers],
-                    mode="markers+text",
-                    text=bg_tickers,
-                    textposition="top center",
-                    textfont=dict(size=10, color="#94a3b8"),
-                    marker=dict(size=9, color="#475569", line=dict(color="#94a3b8", width=1)),
-                    name="Other stocks",
-                    hovertemplate="<b>%{text}</b><br>Volatility: %{x:.1%}<br>Return: %{y:.1%}<extra></extra>",
-                )
+        fig.add_trace(
+            go.Scatter(
+                x=port_vols,
+                y=port_returns,
+                mode="markers",
+                name="Random portfolios",
+                marker=dict(
+                    size=6,
+                    color=sharpe,
+                    colorscale="Viridis",
+                    colorbar=dict(title="Sharpe"),
+                    opacity=0.78,
+                ),
+                customdata=np.column_stack([weights_a, weights_b, sharpe]),
+                hovertemplate=(
+                    "Volatility: %{x:.2%}<br>Return: %{y:.2%}"
+                    f"<br>{ticker_a} Weight: %{{customdata[0]:.1%}}"
+                    f"<br>{ticker_b} Weight: %{{customdata[1]:.1%}}"
+                    "<br>Sharpe: %{customdata[2]:.3f}<extra></extra>"
+                ),
             )
+        )
 
-        if ticker_a in points and ticker_b in points:
-            try:
-                df_a = price_dfs[ticker_a].copy()
-                df_b = price_dfs[ticker_b].copy()
-                df_a["date"] = pd.to_datetime(df_a["date"], errors="coerce")
-                df_b["date"] = pd.to_datetime(df_b["date"], errors="coerce")
-                col_r = "daily_return" if "daily_return" in df_a.columns else "close"
-                ra = df_a.set_index("date")[col_r].dropna()
-                rb = df_b.set_index("date")[col_r].dropna()
-                if col_r == "close":
-                    ra = ra.pct_change().dropna()
-                    rb = rb.pct_change().dropna()
-                common = ra.index.intersection(rb.index)
-                if len(common) >= 10:
-                    rho = float(ra.loc[common].corr(rb.loc[common]))
-                else:
-                    rho = 0.5
-            except Exception:
-                rho = 0.5
-
-            r_a = points[ticker_a]["return"]
-            r_b = points[ticker_b]["return"]
-            v_a = points[ticker_a]["vol"]
-            v_b = points[ticker_b]["vol"]
-
-            weights = np.linspace(0, 1, 200)
-            port_ret = weights * r_a + (1 - weights) * r_b
-            port_vol = np.sqrt(
-                (weights * v_a) ** 2
-                + ((1 - weights) * v_b) ** 2
-                + 2 * weights * (1 - weights) * v_a * v_b * rho
+        fig.add_trace(
+            go.Scatter(
+                x=[port_vols[idx_max_sharpe]],
+                y=[port_returns[idx_max_sharpe]],
+                mode="markers+text",
+                name="Optimal Portfolio (Max Sharpe)",
+                text=[f"{ticker_a}: {weights_a[idx_max_sharpe]:.1%}<br>{ticker_b}: {weights_b[idx_max_sharpe]:.1%}"],
+                textposition="bottom right",
+                textfont=dict(color="#fef08a", size=11),
+                marker=dict(size=17, symbol="star", color="#f59e0b", line=dict(width=1.4, color="#fde68a")),
+                customdata=[[weights_a[idx_max_sharpe], weights_b[idx_max_sharpe], sharpe[idx_max_sharpe]]],
+                hovertemplate=(
+                    "Volatility: %{x:.2%}<br>Return: %{y:.2%}"
+                    f"<br>{ticker_a} Weight: %{{customdata[0]:.1%}}"
+                    f"<br>{ticker_b} Weight: %{{customdata[1]:.1%}}"
+                    "<br>Sharpe: %{customdata[2]:.3f}<extra></extra>"
+                ),
             )
+        )
 
-            fig.add_trace(
-                go.Scatter(
-                    x=port_vol,
-                    y=port_ret,
-                    mode="lines",
-                    line=dict(color="rgba(148, 163, 184, 0.45)", width=2, dash="dot"),
-                    name=f"Frontier ({ticker_a}↔{ticker_b})",
-                    hovertemplate="Volatility: %{x:.1%}<br>Return: %{y:.1%}<extra></extra>",
-                )
+        fig.add_trace(
+            go.Scatter(
+                x=[port_vols[idx_min_vol]],
+                y=[port_returns[idx_min_vol]],
+                mode="markers",
+                name="Minimum Volatility Portfolio",
+                marker=dict(size=14, symbol="diamond", color="#38bdf8", line=dict(width=1.2, color="#bae6fd")),
+                customdata=[[weights_a[idx_min_vol], weights_b[idx_min_vol], sharpe[idx_min_vol]]],
+                hovertemplate=(
+                    "Volatility: %{x:.2%}<br>Return: %{y:.2%}"
+                    f"<br>{ticker_a} Weight: %{{customdata[0]:.1%}}"
+                    f"<br>{ticker_b} Weight: %{{customdata[1]:.1%}}"
+                    "<br>Sharpe: %{customdata[2]:.3f}<extra></extra>"
+                ),
             )
-
-        if ticker_a in points:
-            fig.add_trace(
-                go.Scatter(
-                    x=[points[ticker_a]["vol"]],
-                    y=[points[ticker_a]["return"]],
-                    mode="markers+text",
-                    text=[f"▲ {ticker_a} (A)"],
-                    textposition="top right",
-                    textfont=dict(size=13, color="#38bdf8"),
-                    marker=dict(size=16, color="#38bdf8", symbol="star", line=dict(color="#0ea5e9", width=1.5)),
-                    name=f"{ticker_a}",
-                    hovertemplate=f"<b>{ticker_a}</b><br>Volatility: %{{x:.1%}}<br>Return: %{{y:.1%}}<extra></extra>",
-                )
-            )
-
-        if ticker_b in points:
-            fig.add_trace(
-                go.Scatter(
-                    x=[points[ticker_b]["vol"]],
-                    y=[points[ticker_b]["return"]],
-                    mode="markers+text",
-                    text=[f"● {ticker_b} (B)"],
-                    textposition="top right",
-                    textfont=dict(size=13, color="#f97316"),
-                    marker=dict(size=16, color="#f97316", symbol="circle", line=dict(color="#ea580c", width=1.5)),
-                    name=f"{ticker_b}",
-                    hovertemplate=f"<b>{ticker_b}</b><br>Volatility: %{{x:.1%}}<br>Return: %{{y:.1%}}<extra></extra>",
-                )
-            )
+        )
 
         fig.add_hline(y=0, line_dash="dash", line_color="rgba(148, 163, 184, 0.3)", line_width=1)
 
         fig.update_layout(
             title=dict(
-                text=f"Efficient Frontier — {ticker_a} (A) vs {ticker_b} (B)",
+                text=f"Efficient Frontier — {ticker_a} vs {ticker_b}",
                 x=0.02,
                 xanchor="left",
             ),
@@ -1472,7 +1591,7 @@ class DataVisualizer:
             ),
         )
 
-        stub = f"frontier_{ticker_a.lower()}_vs_{ticker_b.lower()}"
+        stub = "portfolio_efficient_frontier"
         self._save_figure(fig, stub, save)
         logger.info("Saved efficient frontier -> %s", self.output_dir / f"{stub}.html")
         return fig
