@@ -755,13 +755,6 @@ if dashboard_ticker:
             else:
                 st.warning(f"Returns distribution chart not available for {dashboard_ticker}.")
 
-            st.markdown("#### Rolling Stats")
-            rolling_path = ensure_rolling_stats_chart(dashboard_ticker, price_df)
-            if rolling_path is not None:
-                render_chart(rolling_path)
-            else:
-                st.warning(f"Rolling stats chart not available for {dashboard_ticker}.")
-
             st.markdown("#### Indicator Correlation Heatmap")
             ind_corr_path = ensure_indicator_corr_chart(dashboard_ticker, price_df)
             if ind_corr_path is not None:
