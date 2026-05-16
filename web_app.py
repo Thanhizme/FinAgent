@@ -9,6 +9,7 @@ import sys
 from datetime import date, timedelta
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 import streamlit as st
 from dotenv import load_dotenv
@@ -309,7 +310,10 @@ def load_fundamental_df(ticker: str) -> pd.DataFrame | None:
     path = PROCESSED_DIR / f"{ticker}_fundamental_processed.csv"
     if not path.exists():
         return None
-    return pd.read_csv(path)
+    df = pd.read_csv(path)
+    # Normalize common null-like strings so metric formatters do not show false N/A.
+    df = df.replace({"None": np.nan, "none": np.nan, "N/A": np.nan, "": np.nan})
+    return df
 
 def load_benchmark_df() -> pd.DataFrame | None:
     path = PROCESSED_DIR / "benchmark_processed.csv"
@@ -883,6 +887,7 @@ if dashboard_ticker:
                 fund_rows = [
                     ("Current P/E", _last_val(fund_a, "pe"), _last_val(fund_b, "pe")),
                     ("Current P/B", _last_val(fund_a, "pb"), _last_val(fund_b, "pb")),
+                    ("Dividend", _last_val(fund_a, "dividend", dollar=True), _last_val(fund_b, "dividend", dollar=True)),
                     ("Intrinsic Price (DCF)", _last_val(fund_a, "dcf_intrinsic_price", dollar=True), _last_val(fund_b, "dcf_intrinsic_price", dollar=True)),
                     ("Upside / Downside", _last_val(fund_a, "dcf_upside", pct=True), _last_val(fund_b, "dcf_upside", pct=True)),
                 ]

@@ -492,12 +492,24 @@ class DataProcessor:
         news_df: pd.DataFrame | None = None,
         industry_df: pd.DataFrame | None = None,
     ) -> "DataProcessor":
+        # Support both legacy column names and Module 1 normalized names.
+        alias_pairs = {
+            "capital_expenditure": "capex",
+            "receivables": "accounts_receivable",
+            "payble": "accounts_payable",
+            "COGS": "cogs",
+        }
+        for src, dst in alias_pairs.items():
+            if dst not in self.df.columns and src in self.df.columns:
+                self.df[dst] = self.df[src]
+
         numeric_candidates = [
             'revenue', 'operating_profit', 'total_assets', 'total_liabilities',
             'total_debt', 'cash', 'interest_expense', 'ebitda', 'current_assets',
             'current_liabilities', 'retained_earnings', 'market_cap', 'equity',
             'net_income', 'gross_profit', 'operating_cash_flow', 'capex',
             'accounts_receivable', 'inventory', 'accounts_payable', 'cogs',
+            'capital_expenditure', 'receivables', 'payble', 'COGS',
             'short_term_investments', 'income_tax_expense', 'pre_tax_income',
         ]
         for column in numeric_candidates:
@@ -605,6 +617,13 @@ class DataProcessor:
                 self.df.get('total_debt', pd.Series(np.nan, index=self.df.index))
                 + self.df.get('equity', pd.Series(np.nan, index=self.df.index))
             ),
+            np.nan,
+        )
+        self.df['debt_to_equity'] = np.where(
+            self.df.get('equity', pd.Series(np.nan, index=self.df.index)).notna()
+            & (self.df.get('equity', pd.Series(np.nan, index=self.df.index)) != 0),
+            self.df.get('total_debt', pd.Series(np.nan, index=self.df.index))
+            / self.df.get('equity', pd.Series(np.nan, index=self.df.index)),
             np.nan,
         )
         self.df['financial_leverage'] = np.where(

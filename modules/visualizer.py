@@ -230,7 +230,6 @@ class DataVisualizer:
             )
 
         ma_styles = {
-            "ma20": {"color": "#f59e0b", "width": 1.8},
             "ma50": {"color": "#a855f7", "width": 2.1},
             "ma200": {"color": "#22c55e", "width": 2.4},
         }
@@ -309,19 +308,7 @@ class DataVisualizer:
                 row=2,
                 col=1,
             )
-            vol_ma20 = df["volume"].rolling(20).mean()
-            fig.add_trace(
-                go.Scatter(
-                    x=df["date"],
-                    y=vol_ma20,
-                    mode="lines",
-                    line=dict(color="#cbd5e1", width=1.5),
-                    name="VOL MA20",
-                    hovertemplate="%{x|%Y-%m-%d}<br>VOL MA20: %{y:,.0f}<extra></extra>",
-                ),
-                row=2,
-                col=1,
-            )
+            # Removed VOL MA20 trace
 
         fig.update_layout(
             title=dict(text=title, x=0.02, xanchor="left", y=0.97, yanchor="top"),
@@ -972,19 +959,7 @@ class DataVisualizer:
             col=1,
         )
 
-        if "ma20" in df.columns:
-            fig.add_trace(
-                go.Scatter(
-                    x=df["date"],
-                    y=df["ma20"],
-                    mode="lines",
-                    line=dict(color="#f59e0b", width=2.0),
-                    name="MA20",
-                    hovertemplate="%{x|%Y-%m-%d}<br>MA20: %{y:.2f}<extra></extra>",
-                ),
-                row=1,
-                col=1,
-            )
+        # Removed MA20 trace
         if "ma50" in df.columns:
             fig.add_trace(
                 go.Scatter(

@@ -365,6 +365,27 @@ class DataCollector:
         "interest_rate": "^IRX",
     }
 
+    # Module 1 raw schema contracts (strict order + no extra columns)
+    _SCHEMA_PRICE = ["date", "ticker", "open", "high", "low", "close", "adj_close", "volume"]
+    _SCHEMA_BENCHMARK = ["date", "ticker", "close", "volume"]
+    _SCHEMA_PEER = ["date", "ticker", "open", "high", "low", "close", "adj_close", "volume"]
+    _SCHEMA_NEWS = ["date", "ticker", "headline", "summary", "source", "sentiment", "event_type"]
+    _SCHEMA_FUNDAMENTAL = [
+        "date", "ticker", "revenue", "gross_profit", "operating_profit", "net_income", "eps",
+        "total_assets", "total_liabilities", "equity", "total_debt", "cash", "operating_cash_flow",
+        "capital_expenditure", "interest_expense", "tax_rate", "receivables", "inventory", "payble",
+        "current_assets", "current_liabilities", "COGS", "roe", "roa", "pe", "pb",
+        "shares_outstanding", "bvps", "dividend", "market_cap", "risk_free_rate", "market_risk_premium",
+    ]
+    _SCHEMA_MACRO = [
+        "date", "imf_global_growth", "fed_funds_rate", "oil_price", "us_gdp_growth", "us_interest_rate",
+        "us_fx_rate", "us_fdi_inflow", "us_cpi", "vn_gdp_growth", "vn_interest_rate", "vn_fx_rate",
+        "vn_fdi_inflow", "vn_cpi", "vn_unemployment",
+    ]
+    _SCHEMA_INDUSTRY = [
+        "date", "industry_pe", "industry_pb", "industry_pe_1y", "industry_pe_5y", "industry_pb_1y", "industry_pb_5y",
+    ]
+
     _SENTIMENT_POSITIVE = [
         "surge", "beat", "profit", "gain", "growth", "record", "rally",
         "up", "rise", "strong", "boost", "exceed", "outperform", "high",
@@ -537,6 +558,7 @@ class DataCollector:
                 df = df[df["date"] <= end_ts]
             df = df.dropna(subset=["date", "close"]).sort_values("date").reset_index(drop=True)
             df.insert(1, "ticker", "VNINDEX")
+            df = self._enforce_schema(df, self._SCHEMA_BENCHMARK)
             df = self._validate_df(df, "benchmark_vnindex_official")
             if df.empty:
                 return df
@@ -558,9 +580,7 @@ class DataCollector:
         return terms
 
     def _empty_news_frame(self) -> pd.DataFrame:
-        return pd.DataFrame(
-            columns=["date", "ticker", "headline", "summary", "source", "sentiment", "event_type"]
-        )
+        return pd.DataFrame(columns=self._SCHEMA_NEWS)
 
     def _build_ticker_news_query(self, ticker: str, user_query: str | None = None) -> str:
         terms = self._get_news_search_terms(ticker)
@@ -631,6 +651,112 @@ class DataCollector:
             logger.error("Error saving %s: %s", filename, e)
             return None
 
+    @staticmethod
+    def _resolve_dividend_value(ticker_obj=None, info: dict | None = None) -> float:
+        """Resolve annual dividend per share from available APIs.
+
+        Fallback order:
+        1) yfinance info.dividendRate
+        2) yfinance info.trailingAnnualDividendRate
+        3) Sum of dividend payments over trailing 365 days
+        4) 0.0 when stock has no dividend or source is missing
+        """
+        info = info or {}
+
+        def _num(v):
+            try:
+                if v is None:
+                    return None
+                fv = float(v)
+                return fv if np.isfinite(fv) and fv >= 0 else None
+            except Exception:
+                return None
+
+        for key in ("dividendRate", "trailingAnnualDividendRate"):
+            v = _num(info.get(key))
+            if v is not None:
+                return v
+
+        if ticker_obj is not None:
+            try:
+                div = ticker_obj.dividends
+                if div is not None and not div.empty:
+                    cutoff = pd.Timestamp.today(tz="UTC") - pd.Timedelta(days=365)
+                    if getattr(div.index, "tz", None) is None:
+                        cutoff = cutoff.tz_localize(None)
+                    recent = div[div.index >= cutoff]
+                    recent_sum = _num(recent.sum() if recent is not None else None)
+                    if recent_sum is not None:
+                        return recent_sum
+            except Exception as e:
+                logger.debug("Dividend history fallback unavailable: %s", e)
+
+        return 0.0
+
+    def _enforce_schema(self, df: pd.DataFrame, schema: list[str], rename_map: dict[str, str] | None = None) -> pd.DataFrame:
+        """Keep only listed schema columns in order, adding missing columns as NaN."""
+        out = df.copy() if df is not None else pd.DataFrame()
+        if rename_map:
+            out = out.rename(columns=rename_map)
+        for col in schema:
+            if col not in out.columns:
+                out[col] = np.nan
+        return out[schema]
+
+    def _normalize_fundamental_schema(self, df: pd.DataFrame) -> pd.DataFrame:
+        rename_map = {
+            "capex": "capital_expenditure",
+            "accounts_receivable": "receivables",
+            "accounts_payable": "payble",
+            "cogs": "COGS",
+        }
+        out = df.copy().rename(columns=rename_map)
+
+        # Some tickers (e.g., growth stocks) may have no cash dividend reported by source.
+        # Keep schema stable and downstream UI numeric by defaulting missing dividend to 0.0.
+        out["dividend"] = pd.to_numeric(
+            out.get("dividend", pd.Series(np.nan, index=out.index)),
+            errors="coerce",
+        ).fillna(0.0)
+
+        if "tax_rate" not in out.columns:
+            tax_exp = pd.to_numeric(out.get("income_tax_expense", pd.Series(np.nan, index=out.index)), errors="coerce")
+            pre_tax = pd.to_numeric(out.get("pre_tax_income", pd.Series(np.nan, index=out.index)), errors="coerce")
+            out["tax_rate"] = np.where(
+                pre_tax.notna() & (pre_tax != 0),
+                tax_exp / pre_tax,
+                np.nan,
+            )
+
+        return self._enforce_schema(out, self._SCHEMA_FUNDAMENTAL)
+
+    def _normalize_macro_schema(self, df: pd.DataFrame) -> pd.DataFrame:
+        out = df.copy()
+        if "us_gdp_growth" not in out.columns and "gdp" in out.columns:
+            gdp = pd.to_numeric(out["gdp"], errors="coerce")
+            # Prefer YoY growth for GDP fallback to avoid near-all-zero daily pct changes.
+            out["us_gdp_growth"] = gdp.pct_change(periods=4)
+        rename_map = {
+            "us_10y_yield": "us_interest_rate",
+            "dxy": "us_fx_rate",
+            "fdi_inflow": "us_fdi_inflow",
+            "fx_rate": "vn_fx_rate",
+        }
+        out = out.loc[:, ~out.columns.duplicated()]
+        return self._enforce_schema(out, self._SCHEMA_MACRO, rename_map=rename_map)
+
+    def _normalize_industry_schema(self, df: pd.DataFrame) -> pd.DataFrame:
+        out = df.copy()
+        if "industry_pe_1y" not in out.columns and "industry_pe" in out.columns:
+            out["industry_pe_1y"] = pd.to_numeric(out["industry_pe"], errors="coerce").rolling(4, min_periods=1).mean()
+        if "industry_pe_5y" not in out.columns and "industry_pe" in out.columns:
+            out["industry_pe_5y"] = pd.to_numeric(out["industry_pe"], errors="coerce").rolling(20, min_periods=1).mean()
+        if "industry_pb_1y" not in out.columns and "industry_pb" in out.columns:
+            out["industry_pb_1y"] = pd.to_numeric(out["industry_pb"], errors="coerce").rolling(4, min_periods=1).mean()
+        if "industry_pb_5y" not in out.columns and "industry_pb" in out.columns:
+            out["industry_pb_5y"] = pd.to_numeric(out["industry_pb"], errors="coerce").rolling(20, min_periods=1).mean()
+        return self._enforce_schema(out, self._SCHEMA_INDUSTRY)
+
     def _validate_df(self, df, name="DataFrame", date_col="date"):
         """
         Validate a time-series DataFrame (module1.md Section 5):
@@ -672,8 +798,7 @@ class DataCollector:
                         df = self._flatten(raw)
                         df.insert(1, "ticker", ticker)
                         df["adj_close"] = df["close"]
-                        cols = ["date", "ticker", "open", "high", "low", "close", "adj_close", "volume"]
-                        df = df[[c for c in cols if c in df.columns]].sort_values("date").reset_index(drop=True)
+                        df = self._enforce_schema(df, self._SCHEMA_PRICE).sort_values("date").reset_index(drop=True)
                         df = self._validate_df(df, f"{ticker}_price")
                         data_map[ticker] = df
                         self._save_csv(df, f"{ticker}_prices.csv")
@@ -706,7 +831,7 @@ class DataCollector:
                     continue
                 df = self._flatten(raw)
                 df.insert(1, "ticker", symbol)
-                df = df[[c for c in ["date", "ticker", "open", "high", "low", "close", "volume"] if c in df.columns]]
+                df = self._enforce_schema(df, self._SCHEMA_BENCHMARK)
                 df = df.sort_values("date").reset_index(drop=True)
                 df = self._validate_df(df, "benchmark_df")
                 self._save_csv(df, f"benchmark_{symbol.replace('^', '')}.csv")
@@ -746,8 +871,7 @@ class DataCollector:
                 df = self._flatten(raw)
                 df.insert(1, "ticker", ticker)
                 df["adj_close"] = df["close"]
-                cols = ["date", "ticker", "open", "high", "low", "close", "adj_close", "volume"]
-                df = df[[c for c in cols if c in df.columns]].sort_values("date").reset_index(drop=True)
+                df = self._enforce_schema(df, self._SCHEMA_PEER).sort_values("date").reset_index(drop=True)
                 df = self._validate_df(df, f"{ticker}_peer")
                 peer_map[ticker] = df
                 self._save_csv(df, f"peer_{ticker}.csv")
@@ -864,7 +988,7 @@ class DataCollector:
             out[date_key] = float(val) if pd.notna(val) else None
         return out
 
-    def _build_fundamental_from_vnstock(self, ticker: str, info: dict | None = None) -> pd.DataFrame:
+    def _build_fundamental_from_vnstock(self, ticker: str, info: dict | None = None, dividend_value: float | None = None) -> pd.DataFrame:
         if VnFinance is None:
             return pd.DataFrame()
 
@@ -971,7 +1095,7 @@ class DataCollector:
 
         df["pe"] = _info_float("trailingPE")
         df["pb"] = _info_float("priceToBook")
-        df["dividend"] = _info_float("dividendRate")
+        df["dividend"] = dividend_value if dividend_value is not None else _info_float("dividendRate")
         df["market_cap"] = _info_float("marketCap")
 
         cols = [
@@ -982,9 +1106,14 @@ class DataCollector:
             "short_term_investments", "income_tax_expense", "pre_tax_income",
             "current_assets", "current_liabilities", "retained_earnings", "interest_expense", "ebitda", "market_cap",
             "roe", "roa", "pe", "pb", "margin", "debt_to_equity",
-            "shares_outstanding", "bvps", "dividend",
+            "shares_outstanding", "bvps", "dividend", "risk_free_rate", "market_risk_premium",
         ]
-        return df[[c for c in cols if c in df.columns]]
+        result = df[[c for c in cols if c in df.columns]]
+        if "risk_free_rate" not in result.columns:
+            result["risk_free_rate"] = np.nan
+        if "market_risk_premium" not in result.columns:
+            result["market_risk_premium"] = np.nan
+        return result[[c for c in cols if c in result.columns]]
 
     @staticmethod
     def _merge_fundamental_frames(primary: pd.DataFrame, secondary: pd.DataFrame) -> pd.DataFrame:
@@ -1018,6 +1147,8 @@ class DataCollector:
 
     def fetch_financial_statements(self):
         result = {}
+        macro_df = None
+        
         for ticker in self.tickers:
             symbol = self._yf_symbol(ticker)
             logger.info("Fetching financial statements for %s (symbol=%s) ...", ticker, symbol)
@@ -1026,20 +1157,50 @@ class DataCollector:
             balance = t.quarterly_balance_sheet
             cash_flow = t.quarterly_cashflow
             info = t.info
-            df_yf = self._build_fundamental(income, balance, cash_flow, info, ticker)
+            dividend_value = self._resolve_dividend_value(ticker_obj=t, info=info)
+            df_yf = self._build_fundamental(income, balance, cash_flow, info, ticker, dividend_value=dividend_value)
 
             df_vn = pd.DataFrame()
             if ticker in self._VN_TICKERS:
                 logger.info("Applying VN fundamental fallback order for %s: yfinance -> vnstock -> merge", ticker)
-                df_vn = self._build_fundamental_from_vnstock(ticker=ticker, info=info)
+                df_vn = self._build_fundamental_from_vnstock(ticker=ticker, info=info, dividend_value=dividend_value)
 
             df = self._merge_fundamental_frames(df_yf, df_vn)
+            
+            # Merge macro data for risk_free_rate
+            if macro_df is None or macro_df.empty:
+                try:
+                    macro_df = self.fetch_macro_indicators()
+                except Exception as e:
+                    logger.warning("Failed to fetch macro indicators: %s", e)
+                    macro_df = pd.DataFrame()
+            
+            if macro_df is not None and not macro_df.empty:
+                df["date"] = pd.to_datetime(df["date"], errors="coerce").dt.strftime("%Y-%m-%d")
+                macro_subset = macro_df[["date", "fed_funds_rate"]].copy()
+                macro_subset = macro_subset.rename(columns={"fed_funds_rate": "risk_free_rate"})
+                df = df.merge(macro_subset, on="date", how="left", suffixes=("", "_macro"))
+                df["risk_free_rate"] = df["risk_free_rate"].fillna(df.get("risk_free_rate_macro"))
+                df = df.drop(columns=[c for c in df.columns if c.endswith("_macro")], errors="ignore")
+            
+            # Fill missing risk_free_rate and market_risk_premium with defaults
+            if "risk_free_rate" not in df.columns or df["risk_free_rate"].isna().all():
+                df["risk_free_rate"] = 0.045
+            else:
+                df["risk_free_rate"] = df["risk_free_rate"].fillna(0.045)
+            
+            if "market_risk_premium" not in df.columns or df["market_risk_premium"].isna().all():
+                df["market_risk_premium"] = 0.055
+            else:
+                df["market_risk_premium"] = df["market_risk_premium"].fillna(0.055)
+            
+            df = self._normalize_fundamental_schema(df)
             df = self._validate_df(df, f"{ticker}_fundamental")
             result[ticker] = df
             self._save_csv(df, f"{ticker}_fundamental.csv")
         return result
 
-    def _build_fundamental(self, income, balance, cash_flow, info, ticker):
+    def _build_fundamental(self, income, balance, cash_flow, info, ticker, dividend_value: float | None = None):
         def _row(df, *keys):
             if df is None or df.empty:
                 return pd.Series(dtype=float)
@@ -1150,7 +1311,7 @@ class DataCollector:
         import numpy as np
         df["pe"]                 = _i("trailingPE")
         df["pb"]                 = _i("priceToBook")
-        df["dividend"]           = _i("dividendRate")
+        df["dividend"]           = dividend_value if dividend_value is not None else _i("dividendRate")
         df["market_cap"]         = _i("marketCap")
 
         cols = [
@@ -1161,9 +1322,14 @@ class DataCollector:
             "short_term_investments", "income_tax_expense", "pre_tax_income",
             "current_assets", "current_liabilities", "retained_earnings", "interest_expense", "ebitda", "market_cap",
             "roe", "roa", "pe", "pb", "margin", "debt_to_equity",
-            "shares_outstanding", "bvps", "dividend",
+            "shares_outstanding", "bvps", "dividend", "risk_free_rate", "market_risk_premium",
         ]
-        return df[[c for c in cols if c in df.columns]].sort_values("date").reset_index(drop=True)
+        result = df[[c for c in cols if c in df.columns]].sort_values("date").reset_index(drop=True)
+        if "risk_free_rate" not in result.columns:
+            result["risk_free_rate"] = np.nan
+        if "market_risk_premium" not in result.columns:
+            result["market_risk_premium"] = np.nan
+        return result
 
     def fetch_news(self, query, page_size=50):
         """
@@ -1207,6 +1373,7 @@ class DataCollector:
                 return empty_df
 
             df = pd.concat(frames, ignore_index=True)
+            df = self._enforce_schema(df, self._SCHEMA_NEWS)
             df = self._validate_df(df, "news_df")
             filename_stub = "_".join(self.tickers[:3])
             self._save_csv(df, f"news_{filename_stub}.csv")
@@ -1248,46 +1415,195 @@ class DataCollector:
         """
         Schema (macro_df_wide): date, fed_funds_rate, us_10y_yield, us_cpi, dxy, gold_price, oil_price
         """
-        import requests
         data_frames = []
+
+        def _fetch_fred_series(series_id: str, col_name: str) -> pd.DataFrame:
+            logger.info("Fetching macro from FRED API: %s (%s) ...", col_name, series_id)
+            try:
+                url = "https://api.stlouisfed.org/fred/series/observations"
+                params = {
+                    "series_id": series_id,
+                    "api_key": getattr(self, "fred_api_key", None),
+                    "file_type": "json",
+                    "observation_start": self.start_date,
+                    "observation_end": self.end_date,
+                }
+                resp = requests.get(url, params=params, timeout=15)
+                resp.raise_for_status()
+                payload = resp.json()
+                observations = payload.get("observations", [])
+                if not observations:
+                    logger.warning("No data found for FRED series %s", series_id)
+                    return pd.DataFrame()
+
+                valid_obs = [obs for obs in observations if obs.get("value") not in (None, ".")]
+                if not valid_obs:
+                    return pd.DataFrame()
+
+                df = pd.DataFrame(valid_obs)[["date", "value"]]
+                df["value"] = pd.to_numeric(df["value"], errors="coerce")
+                df = df.dropna(subset=["value"])
+                if df.empty:
+                    return pd.DataFrame()
+                df = df.rename(columns={"value": col_name})
+                df["date"] = pd.to_datetime(df["date"], errors="coerce")
+                df = df.dropna(subset=["date"]).set_index("date")
+                return df
+            except Exception as e:
+                logger.error("Failed FRED macro %s: %s", col_name, e)
+                return pd.DataFrame()
+
+        def _fetch_wb_series(country: str, indicator: str, col_name: str) -> pd.DataFrame:
+            try:
+                start_year = pd.Timestamp(self.start_date).year
+                end_year = pd.Timestamp(self.end_date).year
+                url = (
+                    f"https://api.worldbank.org/v2/country/{country}/indicator/{indicator}"
+                    f"?format=json&date={start_year - 5}:{end_year}&per_page=400"
+                )
+                resp = requests.get(url, timeout=15)
+                resp.raise_for_status()
+                payload = resp.json()
+                if not (isinstance(payload, list) and len(payload) > 1 and payload[1]):
+                    logger.warning("World Bank %s/%s returned empty payload.", country, indicator)
+                    return pd.DataFrame()
+
+                rows = []
+                for r in payload[1]:
+                    y = r.get("date")
+                    v = r.get("value")
+                    if y is None or v is None:
+                        continue
+                    rows.append({"date": pd.Timestamp(f"{y}-01-01"), col_name: float(v)})
+
+                if not rows:
+                    logger.warning("World Bank %s/%s has no valid rows.", country, indicator)
+                    return pd.DataFrame()
+
+                return pd.DataFrame(rows).set_index("date").sort_index()
+            except Exception as e:
+                logger.error("Failed World Bank fetch %s/%s: %s", country, indicator, e)
+                return pd.DataFrame()
+
+        def _fetch_imf_world_growth() -> pd.DataFrame:
+            logger.info("Fetching IMF global growth (NGDP_RPCH/W00) ...")
+            try:
+                start_year = pd.Timestamp(self.start_date).year
+                end_year = pd.Timestamp(self.end_date).year
+                periods = ",".join(str(y) for y in range(start_year, end_year + 1))
+                url = f"https://www.imf.org/external/datamapper/api/v2/NGDP_RPCH/W00?periods={periods}"
+                resp = requests.get(url, timeout=15)
+                resp.raise_for_status()
+                payload = resp.json()
+
+                values = payload.get("values", {})
+                indicator_map = values.get("NGDP_RPCH", {}) if isinstance(values, dict) else {}
+                world_map = indicator_map.get("W00", {}) if isinstance(indicator_map, dict) else {}
+
+                rows = []
+                for y, v in (world_map.items() if isinstance(world_map, dict) else []):
+                    if v is None:
+                        continue
+                    rows.append({"date": pd.Timestamp(f"{y}-01-01"), "imf_global_growth": float(v)})
+
+                if not rows:
+                    logger.warning("IMF NGDP_RPCH/W00 aggregate not available in payload.")
+                    return pd.DataFrame()
+                return pd.DataFrame(rows).set_index("date").sort_index()
+            except Exception as e:
+                logger.error("Failed IMF global growth fetch: %s", e)
+                return pd.DataFrame()
+
+        def _fetch_imf_country_growth(country_code: str, col_name: str) -> pd.DataFrame:
+            logger.info("Fetching IMF growth (NGDP_RPCH/%s) ...", country_code)
+            try:
+                start_year = pd.Timestamp(self.start_date).year
+                end_year = pd.Timestamp(self.end_date).year
+                periods = ",".join(str(y) for y in range(start_year, end_year + 1))
+                url = f"https://www.imf.org/external/datamapper/api/v2/NGDP_RPCH/{country_code}?periods={periods}"
+                resp = requests.get(url, timeout=15)
+                resp.raise_for_status()
+                payload = resp.json()
+
+                values = payload.get("values", {})
+                indicator_map = values.get("NGDP_RPCH", {}) if isinstance(values, dict) else {}
+                country_map = indicator_map.get(country_code, {}) if isinstance(indicator_map, dict) else {}
+                if not country_map and isinstance(indicator_map, dict):
+                    country_map = indicator_map.get("", {})
+
+                rows = []
+                for y, v in (country_map.items() if isinstance(country_map, dict) else []):
+                    if v is None:
+                        continue
+                    rows.append({"date": pd.Timestamp(f"{y}-01-01"), col_name: float(v)})
+
+                if not rows:
+                    logger.warning("IMF NGDP_RPCH/%s returned no valid rows.", country_code)
+                    return pd.DataFrame()
+                return pd.DataFrame(rows).set_index("date").sort_index()
+            except Exception as e:
+                logger.error("Failed IMF growth fetch %s: %s", country_code, e)
+                return pd.DataFrame()
+
+        def _fetch_vn_macro_integrated() -> list[pd.DataFrame]:
+            """Integration entry for VN macro sourcing.
+
+            vnstock v4 does not currently expose GDP/CPI/FDI macro endpoints directly,
+            so this function keeps vnstock integration capability while using
+            World Bank series as dependable fallback for missing VN macro fields.
+            """
+            vn_frames = []
+
+            # Keep vnstock integration path active when library is installed.
+            if VnQuote is not None:
+                try:
+                    _ = VnQuote(symbol="VNINDEX", source="VCI")
+                    logger.info("vnstock integration active for VN market data routing.")
+                except Exception as e:
+                    logger.warning("vnstock integration check failed: %s", e)
+
+            # Vietnam macro fields from World Bank (annual frequency).
+            wb_vn_map = {
+                "vn_gdp_growth": "NY.GDP.MKTP.KD.ZG",
+                "vn_interest_rate": "FR.INR.LEND",
+                "vn_fdi_inflow": "BX.KLT.DINV.CD.WD",
+                "vn_cpi": "FP.CPI.TOTL.ZG",
+                "vn_unemployment": "SL.UEM.TOTL.ZS",
+            }
+            for col, indicator in wb_vn_map.items():
+                df = _fetch_wb_series("VN", indicator, col)
+                if not df.empty:
+                    vn_frames.append(df)
+
+            return vn_frames
 
         fred_indicators = {
             "fed_funds_rate": "FEDFUNDS",
             "us_10y_yield": "DGS10",  
             "us_cpi": "CPIAUCSL",
-            "gdp": "GDP",
-            "unemployment_rate": "UNRATE",
+            "us_gdp_growth": "A191RL1Q225SBEA",
         }
-        
+
         for name, series_id in fred_indicators.items():
-            logger.info("Fetching macro from FRED API: %s (%s) ...", name, series_id)
-            try:
-                url = "https://api.stlouisfed.org/fred/series/observations"
-                params = {
-                    "series_id": series_id,
-                    "api_key": getattr(self, 'fred_api_key', None),
-                    "file_type": "json",
-                    "observation_start": self.start_date,
-                    "observation_end": self.end_date
-                }
-                resp = requests.get(url, params=params, timeout=10)
-                resp.raise_for_status()
-                data = resp.json()
-                
-                observations = data.get("observations", [])
-                if observations:
-                    valid_obs = [obs for obs in observations if obs.get("value") != "."]
-                    
-                    df = pd.DataFrame(valid_obs)[["date", "value"]]
-                    df["value"] = df["value"].astype(float)
-                    df = df.rename(columns={"value": name})
-                    df["date"] = pd.to_datetime(df["date"])
-                    df.set_index("date", inplace=True)
-                    data_frames.append(df)
-                else:
-                    logger.warning("No data found for FRED series %s", series_id)
-            except Exception as e:
-                logger.error("Failed FRED macro %s: %s", name, e)
+            df = _fetch_fred_series(series_id, name)
+            if not df.empty:
+                data_frames.append(df)
+
+        has_us_gdp = any("us_gdp_growth" in df.columns and df["us_gdp_growth"].notna().any() for df in data_frames)
+        if not has_us_gdp:
+            logger.warning("FRED us_gdp_growth unavailable; using IMF NGDP_RPCH/USA fallback.")
+            us_gdp_imf = _fetch_imf_country_growth("USA", "us_gdp_growth")
+            if not us_gdp_imf.empty:
+                data_frames.append(us_gdp_imf)
+
+        imf_df = _fetch_imf_world_growth()
+        if not imf_df.empty:
+            data_frames.append(imf_df)
+        else:
+            logger.warning("IMF world aggregate unavailable; using World Bank world GDP growth fallback.")
+            wb_world_growth = _fetch_wb_series("WLD", "NY.GDP.MKTP.KD.ZG", "imf_global_growth")
+            if not wb_world_growth.empty:
+                data_frames.append(wb_world_growth)
 
         yf_indicators = {
             "dxy": "DX-Y.NYB",       
@@ -1309,31 +1625,12 @@ class DataCollector:
             except Exception as e:
                 logger.error("Failed yfinance macro %s: %s", name, e)
 
-        try:
-            start_year = pd.Timestamp(self.start_date).year
-            end_year   = pd.Timestamp(self.end_date).year
-            wb_url = (
-                f"https://api.worldbank.org/v2/country/US/indicator/"
-                f"BX.KLT.DINV.CD.WD?format=json&date={start_year}:{end_year}&per_page=50"
-            )
-            resp = requests.get(wb_url, timeout=10)
-            resp.raise_for_status()
-            payload = resp.json()
-            if isinstance(payload, list) and len(payload) > 1 and payload[1]:
-                wb_rows = [
-                    {"date": pd.Timestamp(f"{r['date']}-01-01"), "fdi_inflow": r["value"]}
-                    for r in payload[1] if r.get("value") is not None
-                ]
-                if wb_rows:
-                    fdi_df = pd.DataFrame(wb_rows).set_index("date").sort_index()
-                    data_frames.append(fdi_df)
-                    logger.info("FDI inflow fetched from World Bank: %d annual rows.", len(fdi_df))
-                else:
-                    logger.warning("World Bank FDI: no valid rows returned.")
-            else:
-                logger.warning("World Bank FDI: unexpected response format.")
-        except Exception as e:
-            logger.error("Failed World Bank FDI fetch: %s", e)
+        us_fdi_df = _fetch_wb_series("US", "BX.KLT.DINV.CD.WD", "us_fdi_inflow")
+        if not us_fdi_df.empty:
+            data_frames.append(us_fdi_df)
+            logger.info("US FDI inflow fetched from World Bank: %d annual rows.", len(us_fdi_df))
+
+        data_frames.extend(_fetch_vn_macro_integrated())
 
         if not data_frames:
             logger.warning("No macro data fetched.")
@@ -1346,21 +1643,15 @@ class DataCollector:
         value_cols = [c for c in macro_df.columns if c != "date"]
         macro_df[value_cols] = macro_df[value_cols].ffill()
 
+        start_ts = pd.to_datetime(self.start_date)
+        end_ts = pd.to_datetime(self.end_date)
+        macro_df = macro_df[(macro_df["date"] >= start_ts) & (macro_df["date"] <= end_ts)].reset_index(drop=True)
+
         macro_df = macro_df.dropna(how='all', subset=value_cols).reset_index(drop=True)
 
         macro_df["date"] = macro_df["date"].dt.strftime("%Y-%m-%d")
 
-        expected_cols = [
-            "date", "fed_funds_rate", "us_10y_yield", "us_cpi",
-            "dxy", "gold_price", "oil_price", "gdp", "unemployment_rate",
-            "domestic_interest_rate", "fx_rate", "fdi_inflow",
-        ]
-        for col in expected_cols:
-            if col not in macro_df.columns:
-                macro_df[col] = np.nan
-        if "domestic_interest_rate" in macro_df.columns:
-            macro_df["domestic_interest_rate"] = macro_df["domestic_interest_rate"].fillna(macro_df.get("fed_funds_rate"))
-        macro_df = macro_df[expected_cols]
+        macro_df = self._normalize_macro_schema(macro_df)
 
         df = self._validate_df(macro_df, "macro_df_wide")
         self._save_csv(df, "macro_indicators.csv")
@@ -1378,7 +1669,7 @@ class DataCollector:
 
         if not peers:
             logger.warning("No peers for industry data - returning empty.")
-            return pd.DataFrame(columns=["date", "industry_roe", "industry_margin"])
+            return pd.DataFrame(columns=self._SCHEMA_INDUSTRY)
 
         logger.info("Computing historical industry data from peers: %s ...", peers)
         all_peer_data = []
@@ -1465,6 +1756,7 @@ class DataCollector:
         })
         
         industry_df = industry_df.sort_values("date").reset_index(drop=True)
+        industry_df = self._normalize_industry_schema(industry_df)
         df = self._validate_df(industry_df, "industry_df")
         self._save_csv(df, "industry_data.csv")
         logger.info("Historical Industry data compiled: %d quarters.", len(df))
