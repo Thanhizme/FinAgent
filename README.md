@@ -414,10 +414,3 @@ not constitute financial advice.
 ---
 
 ## Team
-
-| Member | Role                                    |
-| ------ | --------------------------------------- |
-| TBD    | Data Collection and API Integration     |
-| TBD    | Data Processing and Feature Engineering |
-| TBD    | Visualisation and Dashboard             |
-| TBD    | AI Analysis and Report Writing          |

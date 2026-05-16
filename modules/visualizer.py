@@ -116,6 +116,9 @@ class DataVisualizer:
         out["ma20"] = out["close"].rolling(20).mean()
         out["ma50"] = out["close"].rolling(50).mean()
         out["ma200"] = out["close"].rolling(200).mean()
+        rolling_std20 = out["close"].rolling(20).std()
+        out["bb_upper"] = out["ma20"] + 2.0 * rolling_std20
+        out["bb_lower"] = out["ma20"] - 2.0 * rolling_std20
         return out
 
     def _normalise_timeframes(self, timeframe: str) -> list[str]:
@@ -245,6 +248,34 @@ class DataVisualizer:
                     row=1,
                     col=1,
                 )
+
+        if "bb_upper" in df.columns and "bb_lower" in df.columns:
+            fig.add_trace(
+                go.Scatter(
+                    x=df["date"],
+                    y=df["bb_upper"],
+                    mode="lines",
+                    line=dict(color="rgba(56, 189, 248, 0.9)", width=1.2, dash="dot"),
+                    name="BB Upper",
+                    hovertemplate="%{x|%Y-%m-%d}<br>BB Upper: %{y:.2f}<extra></extra>",
+                ),
+                row=1,
+                col=1,
+            )
+            fig.add_trace(
+                go.Scatter(
+                    x=df["date"],
+                    y=df["bb_lower"],
+                    mode="lines",
+                    line=dict(color="rgba(56, 189, 248, 0.9)", width=1.2, dash="dot"),
+                    fill="tonexty",
+                    fillcolor="rgba(59, 130, 246, 0.10)",
+                    name="BB Lower",
+                    hovertemplate="%{x|%Y-%m-%d}<br>BB Lower: %{y:.2f}<extra></extra>",
+                ),
+                row=1,
+                col=1,
+            )
 
         if "volume" in df.columns:
             if "open" in df.columns:
@@ -410,11 +441,12 @@ class DataVisualizer:
         # User-configured view: use primary ticker only; concise Trend/Return signals.
         indicator_specs = [
             ("trend", "daily_ret", "daily_return", "DRET"),
-            ("trend", "log_ret", "log_return", "LRET"),
             ("trend", "volume", "volume", "VOL"),
             ("osc", "ma20", "ma20", "MA20"),
             ("osc", "ma50", "ma50", "MA50"),
             ("osc", "ma200", "ma200", "MA200"),
+            ("osc", "bb_upper", "bb_upper", "BBU"),
+            ("osc", "bb_lower", "bb_lower", "BBL"),
             ("osc", "rsi", "rsi_14", "RSI"),
             ("osc", "macd", "macd_line", "MACD"),
             ("risk", "hv30", "volatility_30", "HV30"),
@@ -458,6 +490,11 @@ class DataVisualizer:
                     out["ma50"] = close.rolling(50).mean()
                 if "ma200" not in out.columns:
                     out["ma200"] = close.rolling(200).mean()
+                rolling_std20 = close.rolling(20).std()
+                if "bb_upper" not in out.columns:
+                    out["bb_upper"] = out["ma20"] + 2.0 * rolling_std20
+                if "bb_lower" not in out.columns:
+                    out["bb_lower"] = out["ma20"] - 2.0 * rolling_std20
                 if "max_drawdown" not in out.columns:
                     rolling_max = close.cummax()
                     drawdown = (close - rolling_max) / rolling_max
@@ -518,7 +555,7 @@ class DataVisualizer:
         corr = numeric[valid_cols].corr(method="pearson", min_periods=min_periods).round(2)
 
         axis_labels = [
-            col.replace("|", "<br>").replace(":", " ")
+            col.split("|", 1)[-1].replace(":", " ")
             for col in corr.columns
         ]
         n_cols = len(corr.columns)
@@ -557,7 +594,7 @@ class DataVisualizer:
         fig.update_xaxes(tickangle=-45, side="bottom")
         fig.update_yaxes(autorange="reversed")
 
-        filename_stub = "portfolio_indicator_correlation"
+        filename_stub = f"indicator_corr_{ticker_a}"
         self._save_figure(fig, filename_stub, save)
         logger.info("Saved indicator correlation heatmap -> %s", self.output_dir / f"{filename_stub}.html")
         return fig
@@ -1487,6 +1524,12 @@ class DataVisualizer:
         port_vols = np.sqrt(np.einsum("ij,jk,ik->i", weights, cov_matrix, weights))
         sharpe = (port_returns - risk_free_rate) / np.where(port_vols == 0, np.nan, port_vols)
 
+        # Endpoints for 100% single-asset allocations.
+        vol_a = float(np.sqrt(cov_matrix[0, 0]))
+        vol_b = float(np.sqrt(cov_matrix[1, 1]))
+        ret_a = float(mean_returns[0])
+        ret_b = float(mean_returns[1])
+
         idx_max_sharpe = int(np.nanargmax(sharpe))
         idx_min_vol = int(np.nanargmin(port_vols))
 
@@ -1518,11 +1561,8 @@ class DataVisualizer:
             go.Scatter(
                 x=[port_vols[idx_max_sharpe]],
                 y=[port_returns[idx_max_sharpe]],
-                mode="markers+text",
+                mode="markers",
                 name="Optimal Portfolio (Max Sharpe)",
-                text=[f"{ticker_a}: {weights_a[idx_max_sharpe]:.1%}<br>{ticker_b}: {weights_b[idx_max_sharpe]:.1%}"],
-                textposition="bottom right",
-                textfont=dict(color="#fef08a", size=11),
                 marker=dict(size=17, symbol="star", color="#f59e0b", line=dict(width=1.4, color="#fde68a")),
                 customdata=[[weights_a[idx_max_sharpe], weights_b[idx_max_sharpe], sharpe[idx_max_sharpe]]],
                 hovertemplate=(
@@ -1532,6 +1572,123 @@ class DataVisualizer:
                     "<br>Sharpe: %{customdata[2]:.3f}<extra></extra>"
                 ),
             )
+        )
+
+        fig.add_annotation(
+            x=float(port_vols[idx_max_sharpe]),
+            y=float(port_returns[idx_max_sharpe]),
+            xanchor="center",
+            yanchor="bottom",
+            xshift=0,
+            yshift=22,
+            align="left",
+            showarrow=False,
+            bgcolor="rgba(15, 23, 42, 0.90)",
+            bordercolor="rgba(245, 158, 11, 0.65)",
+            borderwidth=1,
+            font=dict(size=11, color="#fef08a"),
+            text=(
+                "<b>Optimal Portfolio (Max Sharpe)</b>"
+                f"<br>{ticker_a}: {weights_a[idx_max_sharpe]:.1%}"
+                f"<br>{ticker_b}: {weights_b[idx_max_sharpe]:.1%}"
+            ),
+        )
+
+        fig.add_trace(
+            go.Scatter(
+                x=[vol_a],
+                y=[ret_a],
+                mode="markers",
+                name=f"{ticker_a} Endpoint",
+                marker=dict(size=13, symbol="circle", color="#22d3ee", line=dict(width=1.2, color="#cffafe")),
+                showlegend=False,
+                hovertemplate=(
+                    "Volatility: %{x:.2%}<br>Return: %{y:.2%}"
+                    f"<br>{ticker_a} Weight: 100.0%"
+                    f"<br>{ticker_b} Weight: 0.0%<extra></extra>"
+                ),
+            )
+        )
+
+        fig.add_trace(
+            go.Scatter(
+                x=[vol_b],
+                y=[ret_b],
+                mode="markers",
+                name=f"{ticker_b} Endpoint",
+                marker=dict(size=13, symbol="circle", color="#f97316", line=dict(width=1.2, color="#ffedd5")),
+                showlegend=False,
+                hovertemplate=(
+                    "Volatility: %{x:.2%}<br>Return: %{y:.2%}"
+                    f"<br>{ticker_a} Weight: 0.0%"
+                    f"<br>{ticker_b} Weight: 100.0%<extra></extra>"
+                ),
+            )
+        )
+
+        # Capital Market Line from risk-free point to tangency portfolio (max Sharpe).
+        tangent_vol = float(port_vols[idx_max_sharpe])
+        tangent_ret = float(port_returns[idx_max_sharpe])
+        max_vol = float(np.nanmax(np.concatenate([port_vols, np.array([vol_a, vol_b])])) )
+        slope = 0.0
+        if tangent_vol > 0:
+            slope = (tangent_ret - risk_free_rate) / tangent_vol
+        cml_x = np.array([0.0, max_vol * 1.05])
+        cml_y = risk_free_rate + slope * cml_x
+        fig.add_trace(
+            go.Scatter(
+                x=cml_x,
+                y=cml_y,
+                mode="lines",
+                name="CML",
+                line=dict(color="#f43f5e", width=2.0, dash="dash"),
+                hovertemplate="Volatility: %{x:.2%}<br>CML Return: %{y:.2%}<extra></extra>",
+            )
+        )
+        fig.add_trace(
+            go.Scatter(
+                x=[0.0],
+                y=[risk_free_rate],
+                mode="markers+text",
+                name="Risk-free",
+                text=[f"Rf: {risk_free_rate:.2%}"],
+                textposition="top right",
+                marker=dict(size=10, symbol="x", color="#fb7185"),
+                showlegend=False,
+                hovertemplate="Risk-free Rate: %{y:.2%}<extra></extra>",
+            )
+        )
+
+        # Use anchored annotations for endpoint weights to avoid text overlap near markers.
+        fig.add_annotation(
+            x=vol_a,
+            y=ret_a,
+            xanchor="left",
+            yanchor="top",
+            xshift=16,
+            yshift=-18,
+            align="left",
+            showarrow=False,
+            bgcolor="rgba(15, 23, 42, 0.88)",
+            bordercolor="rgba(125, 211, 252, 0.55)",
+            borderwidth=1,
+            font=dict(size=11, color="#7dd3fc"),
+            text=f"<b>{ticker_a}</b><br>{ticker_a}: 100%<br>{ticker_b}: 0%",
+        )
+        fig.add_annotation(
+            x=vol_b,
+            y=ret_b,
+            xanchor="right",
+            yanchor="top",
+            xshift=-16,
+            yshift=-18,
+            align="left",
+            showarrow=False,
+            bgcolor="rgba(15, 23, 42, 0.88)",
+            bordercolor="rgba(251, 146, 60, 0.55)",
+            borderwidth=1,
+            font=dict(size=11, color="#fdba74"),
+            text=f"<b>{ticker_b}</b><br>{ticker_a}: 0%<br>{ticker_b}: 100%",
         )
 
         fig.add_trace(
@@ -1549,6 +1706,26 @@ class DataVisualizer:
                     "<br>Sharpe: %{customdata[2]:.3f}<extra></extra>"
                 ),
             )
+        )
+
+        fig.add_annotation(
+            x=float(port_vols[idx_min_vol]),
+            y=float(port_returns[idx_min_vol]),
+            xanchor="left",
+            yanchor="bottom",
+            xshift=14,
+            yshift=14,
+            align="left",
+            showarrow=False,
+            bgcolor="rgba(15, 23, 42, 0.88)",
+            bordercolor="rgba(56, 189, 248, 0.55)",
+            borderwidth=1,
+            font=dict(size=11, color="#7dd3fc"),
+            text=(
+                "<b>Minimum Volatility</b>"
+                f"<br>{ticker_a}: {weights_a[idx_min_vol]:.1%}"
+                f"<br>{ticker_b}: {weights_b[idx_min_vol]:.1%}"
+            ),
         )
 
         fig.add_hline(y=0, line_dash="dash", line_color="rgba(148, 163, 184, 0.3)", line_width=1)

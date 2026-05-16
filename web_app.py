@@ -396,6 +396,9 @@ def rolling_stats_path(ticker: str) -> Path:
 def portfolio_performance_path() -> Path:
     return VIS_DIR / "portfolio_cumulative_performance.html"
 
+def indicator_corr_path(ticker: str) -> Path:
+    return VIS_DIR / f"indicator_corr_{ticker}.html"
+
 def portfolio_indicator_correlation_path() -> Path:
     return VIS_DIR / "portfolio_indicator_correlation.html"
 
@@ -460,7 +463,7 @@ def ensure_portfolio_charts(
 ) -> dict[str, Path | None]:
     paths = {
         "performance": portfolio_performance_path(),
-        "indicator_corr": portfolio_indicator_correlation_path(),
+        "indicator_corr": indicator_corr_path(ticker_a),
         "asset_corr": portfolio_asset_correlation_path(),
         "frontier": portfolio_efficient_frontier_path(),
     }
@@ -480,9 +483,6 @@ def ensure_portfolio_charts(
         )
         visualizer.indicator_correlation_heatmap(
             ticker_a=ticker_a,
-            ticker_b=ticker_b,
-            benchmark_df=benchmark_df,
-            benchmark_label=benchmark_label,
             save=True,
         )
         visualizer.asset_return_correlation_heatmap(
@@ -502,17 +502,17 @@ def ensure_portfolio_charts(
         st.error(f"Unable to generate portfolio charts: {exc}")
         return {k: (p if p.exists() else None) for k, p in paths.items()}
 
-def ensure_correlation_heatmap_chart(ticker: str, price_df: pd.DataFrame) -> Path | None:
-    path = portfolio_indicator_correlation_path()
+def ensure_indicator_corr_chart(ticker: str, price_df: pd.DataFrame) -> Path | None:
+    path = indicator_corr_path(ticker)
     if price_df is None or price_df.empty:
         return path if path.exists() else None
 
     try:
         visualizer = DataVisualizer({ticker: price_df})
-        visualizer.correlation_heatmap(ticker=ticker, save=True)
+        visualizer.indicator_correlation_heatmap(ticker_a=ticker, save=True)
         return path if path.exists() else None
     except Exception as exc:
-        st.error(f"Unable to generate correlation heatmap for {ticker}: {exc}")
+        st.error(f"Unable to generate indicator correlation heatmap for {ticker}: {exc}")
         return None
 
 def render_chart(path: Path, height: int = 980) -> None:
@@ -762,6 +762,13 @@ if dashboard_ticker:
             else:
                 st.warning(f"Rolling stats chart not available for {dashboard_ticker}.")
 
+            st.markdown("#### Indicator Correlation Heatmap")
+            ind_corr_path = ensure_indicator_corr_chart(dashboard_ticker, price_df)
+            if ind_corr_path is not None:
+                render_chart(ind_corr_path, height=820)
+            else:
+                st.warning(f"Indicator correlation heatmap not available for {dashboard_ticker}.")
+
             if "daily_return" in price_df.columns:
                 returns = price_df["daily_return"].dropna()
                 if not returns.empty:
@@ -823,13 +830,6 @@ if dashboard_ticker:
                 else:
                     st.warning("Not enough data to build cumulative performance chart.")
 
-                st.markdown("#### Indicator Correlation Heatmap")
-                indicator_corr_path = chart_bundle.get("indicator_corr")
-                if indicator_corr_path is not None:
-                    render_chart(indicator_corr_path, height=820)
-                else:
-                    st.warning("Indicator correlation heatmap not available.")
-
                 st.markdown("#### Asset Correlation Heatmap")
                 asset_corr_path = chart_bundle.get("asset_corr")
                 if asset_corr_path is not None:
@@ -844,7 +844,24 @@ if dashboard_ticker:
                 else:
                     st.warning("Efficient frontier chart not available.")
 
-                def _last_val(df, col, pct=False, dollar=False):
+                def _last_val(df, col, pct=False, dollar=False, days=False, raw=False):
+                    if df is None or df.empty or col not in df.columns:
+                        return "N/A"
+                    v = pd.to_numeric(df[col], errors="coerce").dropna()
+                    if v.empty:
+                        return "N/A"
+                    val = float(v.iloc[-1])
+                    if raw:
+                        return val
+                    if pct:
+                        return f"{val * 100:.2f}%"
+                    if dollar:
+                        return f"${val:,.2f}"
+                    if days:
+                        return f"{val:.1f} days"
+                    return f"{val:.4f}"
+
+                def _last_tech(df, col, pct=False, dollar=False):
                     if df is None or df.empty or col not in df.columns:
                         return "N/A"
                     v = pd.to_numeric(df[col], errors="coerce").dropna()
@@ -857,60 +874,51 @@ if dashboard_ticker:
                         return f"${val:,.2f}"
                     return f"{val:.4f}"
 
-                def _last_tech(df, col, pct=False):
-                    if df is None or df.empty or col not in df.columns:
-                        return "N/A"
-                    v = pd.to_numeric(df[col], errors="coerce").dropna()
-                    if v.empty:
-                        return "N/A"
-                    val = float(v.iloc[-1])
-                    return f"{val * 100:.2f}%" if pct else f"{val:.4f}"
-
+                # ── Financial Health ──────────────────────────────────────────
                 health_rows = [
-                    ("ROE", _last_val(fund_a, "roe", pct=True), _last_val(fund_b, "roe", pct=True)),
+                    ("Revenue Growth (YoY)", _last_val(fund_a, "revenue_growth", pct=True), _last_val(fund_b, "revenue_growth", pct=True)),
                     ("ROA", _last_val(fund_a, "roa", pct=True), _last_val(fund_b, "roa", pct=True)),
-                    ("Debt/Equity", _last_val(fund_a, "debt_to_equity"), _last_val(fund_b, "debt_to_equity")),
+                    ("ROE", _last_val(fund_a, "roe", pct=True), _last_val(fund_b, "roe", pct=True)),
+                    ("Cash Conversion Cycle (DSO+DIO−DPO)", _last_val(fund_a, "cash_conversion_cycle", days=True), _last_val(fund_b, "cash_conversion_cycle", days=True)),
                     ("Current Ratio", _last_val(fund_a, "current_ratio"), _last_val(fund_b, "current_ratio")),
-                    ("Interest Coverage", _last_val(fund_a, "interest_coverage"), _last_val(fund_b, "interest_coverage")),
-                    ("Altman Z-Score", _last_val(fund_a, "altman_z_score"), _last_val(fund_b, "altman_z_score")),
-                    ("Net Profit Margin", _last_val(fund_a, "net_profit_margin", pct=True), _last_val(fund_b, "net_profit_margin", pct=True)),
-                    ("Gross Profit Margin", _last_val(fund_a, "gross_profit_margin", pct=True), _last_val(fund_b, "gross_profit_margin", pct=True)),
+                    ("Debt-to-Equity (D/E)", _last_val(fund_a, "debt_to_equity"), _last_val(fund_b, "debt_to_equity")),
+                    ("FCFF", _last_val(fund_a, "fcff", dollar=True), _last_val(fund_b, "fcff", dollar=True)),
+                    ("FCFE", _last_val(fund_a, "fcfe", dollar=True), _last_val(fund_b, "fcfe", dollar=True)),
                 ]
 
+                # ── Fundamental Valuation ─────────────────────────────────────
                 fund_rows = [
-                    ("P/E Ratio", _last_val(fund_a, "pe"), _last_val(fund_b, "pe")),
-                    ("P/B Ratio", _last_val(fund_a, "pb"), _last_val(fund_b, "pb")),
-                    ("EPS", _last_val(fund_a, "eps", dollar=True), _last_val(fund_b, "eps", dollar=True)),
-                    ("BVPS", _last_val(fund_a, "bvps", dollar=True), _last_val(fund_b, "bvps", dollar=True)),
-                    ("Dividend", _last_val(fund_a, "dividend", dollar=True), _last_val(fund_b, "dividend", dollar=True)),
-                    ("Market Cap", _last_val(fund_a, "market_cap"), _last_val(fund_b, "market_cap")),
-                    ("Net Debt/EBITDA", _last_val(fund_a, "net_debt_to_ebitda"), _last_val(fund_b, "net_debt_to_ebitda")),
+                    ("Current P/E", _last_val(fund_a, "pe"), _last_val(fund_b, "pe")),
+                    ("Current P/B", _last_val(fund_a, "pb"), _last_val(fund_b, "pb")),
+                    ("Intrinsic Price (DCF)", _last_val(fund_a, "dcf_intrinsic_price", dollar=True), _last_val(fund_b, "dcf_intrinsic_price", dollar=True)),
+                    ("Upside / Downside", _last_val(fund_a, "dcf_upside", pct=True), _last_val(fund_b, "dcf_upside", pct=True)),
                 ]
 
+                # ── Technical Analysis ────────────────────────────────────────
                 tech_rows = [
-                    ("RSI 14", _last_tech(price_df, "rsi_14"), _last_tech(price_b, "rsi_14")),
-                    ("MACD Line", _last_tech(price_df, "macd_line"), _last_tech(price_b, "macd_line")),
-                    ("Sharpe Ratio", _last_tech(price_df, "sharpe_ratio"), _last_tech(price_b, "sharpe_ratio")),
-                    ("Volatility 30d", _last_tech(price_df, "volatility_30", pct=True), _last_tech(price_b, "volatility_30", pct=True)),
-                    ("Beta", _last_tech(price_df, "beta"), _last_tech(price_b, "beta")),
+                    ("MA20", _last_tech(price_df, "ma20", dollar=True), _last_tech(price_b, "ma20", dollar=True)),
+                    ("MACD", _last_tech(price_df, "macd_line"), _last_tech(price_b, "macd_line")),
+                    ("RSI (14)", _last_tech(price_df, "rsi_14"), _last_tech(price_b, "rsi_14")),
+                    ("Historical Volatility 30D", _last_tech(price_df, "volatility_30", pct=True), _last_tech(price_b, "volatility_30", pct=True)),
+                    ("Beta vs. Index", _last_tech(price_df, "beta"), _last_tech(price_b, "beta")),
+                    ("VaR 95%", _last_tech(price_df, "var_95", pct=True), _last_tech(price_b, "var_95", pct=True)),
                     ("Max Drawdown", _last_tech(price_df, "max_drawdown", pct=True), _last_tech(price_b, "max_drawdown", pct=True)),
-                    ("Rel. Strength", _last_tech(price_df, "relative_strength"), _last_tech(price_b, "relative_strength")),
-                    ("ADX 14", _last_tech(price_df, "adx_14"), _last_tech(price_b, "adx_14")),
+                    ("Sharpe Ratio", _last_tech(price_df, "sharpe_ratio"), _last_tech(price_b, "sharpe_ratio")),
                 ]
 
                 col_left, col_right = st.columns(2)
 
                 with col_left:
-                    st.markdown("#### Company Financial Health")
+                    st.markdown("#### Financial Health")
                     h_df = pd.DataFrame(health_rows, columns=["Metric", dashboard_ticker, stock_b])
                     st.dataframe(h_df.set_index("Metric"), width="stretch")
 
+                with col_right:
                     st.markdown("#### Fundamental Valuation")
                     f_df = pd.DataFrame(fund_rows, columns=["Metric", dashboard_ticker, stock_b])
                     st.dataframe(f_df.set_index("Metric"), width="stretch")
 
-                with col_right:
-                    st.markdown("#### Technical Valuation")
+                    st.markdown("#### Technical Analysis")
                     t_df = pd.DataFrame(tech_rows, columns=["Metric", dashboard_ticker, stock_b])
                     st.dataframe(t_df.set_index("Metric"), width="stretch")
 
