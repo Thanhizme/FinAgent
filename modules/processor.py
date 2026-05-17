@@ -17,6 +17,31 @@ PROCESSED_DATA_DIR.mkdir(parents=True, exist_ok=True)
 ROLLING_BETA_WINDOW = 60
 ROLLING_SHARPE_WINDOW = 252
 
+FUNDAMENTAL_EXPORT_COLUMNS = [
+    "date", "ticker", "revenue", "gross_profit", "operating_profit", "net_income", "eps",
+    "total_assets", "total_liabilities", "equity", "total_debt", "operating_cash_flow",
+    "capital_expenditure", "interest_expense", "tax_rate", "receivables", "inventory", "payble",
+    "current_assets", "current_liabilities", "COGS", "roe", "roa", "pe", "pb",
+    "shares_outstanding", "market_cap", "risk_free_rate", "market_risk_premium",
+    "gross_profit_margin", "revenue_growth", "net_profit_margin", "receivable_turnover",
+    "days_sales_outstanding", "inventory_turnover", "days_inventory_outstanding", "payable_turnover",
+    "days_payable_outstanding", "cash_conversion_cycle", "current_ratio", "debt_to_equity",
+    "interest_coverage", "fcff", "fcfe", "latest_event_type", "latest_sentiment",
+    "news_article_count", "pe_1y_avg", "pe_5y_avg", "pb_1y_avg", "pb_5y_avg",
+    "pe_industry", "pb_industry", "dcf_intrinsic_price", "dcf_upside", "dcf_invalid_reason",
+    "dcf_is_valid",
+]
+
+PRICE_EXPORT_COLUMNS = [
+    "date", "ticker", "open", "high", "low", "close", "adj_close", "volume", "daily_return",
+    "log_return", "is_outlier", "cum_return_7", "cum_return_30", "cum_return_90",
+    "cum_return_ytd", "ma20", "ma50", "ma200", "ma20_signal", "ma50_signal", "ma200_signal",
+    "rsi_14", "macd_line", "macd_signal", "macd_hist", "bb_middle", "bb_upper", "bb_lower",
+    "volume_spike", "gap_up", "gap_down", "sudden_price_movement", "volatility_30",
+    "volatility_60", "beta", "var_95", "var_99", "drawdown", "max_drawdown", "sharpe_ratio",
+    "relative_strength",
+]
+
 class DataProcessor:
 
     def __init__(self, df: pd.DataFrame, ticker: str) -> None:
@@ -974,10 +999,36 @@ class DataProcessor:
         self._save_csv()
         return self.df
 
+    def _export_columns_for_filename(self, filename: str) -> list[str] | None:
+        if filename.endswith("_fundamental_processed.csv"):
+            return FUNDAMENTAL_EXPORT_COLUMNS
+
+        if filename.endswith("_processed.csv") and filename not in {
+            "benchmark_processed.csv",
+            "industry_processed.csv",
+            "macro_processed.csv",
+            "news_processed.csv",
+        }:
+            return PRICE_EXPORT_COLUMNS
+
+        return None
+
+    def _prepare_export_df(self, filename: str) -> pd.DataFrame:
+        export_cols = self._export_columns_for_filename(filename)
+        if not export_cols:
+            return self.df
+
+        export_df = self.df.copy()
+        for col in export_cols:
+            if col not in export_df.columns:
+                export_df[col] = np.nan
+        return export_df.loc[:, export_cols]
+
     def _save_csv(self, filename: str | None = None) -> Path:
         filename = filename or f"{self.ticker}_processed.csv"
         filepath = PROCESSED_DATA_DIR / filename
-        self.df.to_csv(filepath, index = False)
+        export_df = self._prepare_export_df(filename)
+        export_df.to_csv(filepath, index=False)
         logger.info("Saved processed data -> %s", filepath)
         return filepath
 

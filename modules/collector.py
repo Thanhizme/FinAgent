@@ -1156,9 +1156,18 @@ class DataCollector:
             income = t.quarterly_financials
             balance = t.quarterly_balance_sheet
             cash_flow = t.quarterly_cashflow
+            income_annual = t.income_stmt
             info = t.info
             dividend_value = self._resolve_dividend_value(ticker_obj=t, info=info)
-            df_yf = self._build_fundamental(income, balance, cash_flow, info, ticker, dividend_value=dividend_value)
+            df_yf = self._build_fundamental(
+                income,
+                balance,
+                cash_flow,
+                info,
+                ticker,
+                dividend_value=dividend_value,
+                income_annual=income_annual,
+            )
 
             df_vn = pd.DataFrame()
             if ticker in self._VN_TICKERS:
@@ -1200,7 +1209,16 @@ class DataCollector:
             self._save_csv(df, f"{ticker}_fundamental.csv")
         return result
 
-    def _build_fundamental(self, income, balance, cash_flow, info, ticker, dividend_value: float | None = None):
+    def _build_fundamental(
+        self,
+        income,
+        balance,
+        cash_flow,
+        info,
+        ticker,
+        dividend_value: float | None = None,
+        income_annual: pd.DataFrame | None = None,
+    ):
         def _row(df, *keys):
             if df is None or df.empty:
                 return pd.Series(dtype=float)
@@ -1219,6 +1237,29 @@ class DataCollector:
             dates.update(cash_flow.columns)
         dates = sorted(list(dates), reverse=True)
 
+        annual_interest_points: list[tuple[pd.Timestamp, float]] = []
+        annual_interest_row = _row(
+            income_annual,
+            "Interest Expense",
+            "Interest Expense Non Operating",
+            "Interest Expense Non Operating And Other",
+        )
+        if annual_interest_row is not None and not annual_interest_row.empty:
+            for col in annual_interest_row.index:
+                ts = pd.to_datetime(col, errors="coerce")
+                val = pd.to_numeric(pd.Series([annual_interest_row[col]]), errors="coerce").iloc[0]
+                if pd.notna(ts) and pd.notna(val):
+                    annual_interest_points.append((pd.Timestamp(ts), float(val)))
+            annual_interest_points.sort(key=lambda item: item[0])
+
+        def _fallback_annual_interest(quarter_date: pd.Timestamp) -> float | None:
+            if not annual_interest_points or pd.isna(quarter_date):
+                return None
+            eligible = [v for d, v in annual_interest_points if d <= quarter_date]
+            if eligible:
+                return float(eligible[-1])
+            return float(annual_interest_points[0][1])
+
         rows = []
         for date in dates:
             def _v(s, _d=date):
@@ -1235,7 +1276,16 @@ class DataCollector:
             current_assets = _v(_row(balance, "Current Assets"))
             current_liabilities = _v(_row(balance, "Current Liabilities"))
             retained_earnings = _v(_row(balance, "Retained Earnings"))
-            interest_expense = _v(_row(income, "Interest Expense"))
+            interest_expense = _v(
+                _row(
+                    income,
+                    "Interest Expense",
+                    "Interest Expense Non Operating",
+                    "Interest Expense Non Operating And Other",
+                )
+            )
+            if interest_expense is None:
+                interest_expense = _fallback_annual_interest(pd.to_datetime(date, errors="coerce"))
             ebitda = _v(_row(income, "EBITDA"))
             
             if rev is None and net_inc is None and assets is None and equity is None:

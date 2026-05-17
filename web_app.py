@@ -869,14 +869,14 @@ if dashboard_ticker:
                         return f"{val * 100:.2f}%"
                     if dollar:
                         return f"${val:,.2f}"
-                    return f"{val:.4f}"
+                    return f"{val:.3f}"
 
                 # ── Financial Health ──────────────────────────────────────────
                 health_rows = [
                     ("Revenue Growth (YoY)", _last_val(fund_a, "revenue_growth", pct=True), _last_val(fund_b, "revenue_growth", pct=True)),
                     ("ROA", _last_val(fund_a, "roa", pct=True), _last_val(fund_b, "roa", pct=True)),
                     ("ROE", _last_val(fund_a, "roe", pct=True), _last_val(fund_b, "roe", pct=True)),
-                    ("Cash Conversion Cycle (DSO+DIO−DPO)", _last_val(fund_a, "cash_conversion_cycle", days=True), _last_val(fund_b, "cash_conversion_cycle", days=True)),
+                    ("Cash Conversion Cycle", _last_val(fund_a, "cash_conversion_cycle", days=True), _last_val(fund_b, "cash_conversion_cycle", days=True)),
                     ("Current Ratio", _last_val(fund_a, "current_ratio"), _last_val(fund_b, "current_ratio")),
                     ("Debt-to-Equity (D/E)", _last_val(fund_a, "debt_to_equity"), _last_val(fund_b, "debt_to_equity")),
                     ("FCFF", _last_val(fund_a, "fcff", dollar=True), _last_val(fund_b, "fcff", dollar=True)),
@@ -887,9 +887,8 @@ if dashboard_ticker:
                 fund_rows = [
                     ("Current P/E", _last_val(fund_a, "pe"), _last_val(fund_b, "pe")),
                     ("Current P/B", _last_val(fund_a, "pb"), _last_val(fund_b, "pb")),
-                    ("Dividend", _last_val(fund_a, "dividend", dollar=True), _last_val(fund_b, "dividend", dollar=True)),
                     ("Intrinsic Price (DCF)", _last_val(fund_a, "dcf_intrinsic_price", dollar=True), _last_val(fund_b, "dcf_intrinsic_price", dollar=True)),
-                    ("Upside / Downside", _last_val(fund_a, "dcf_upside", pct=True), _last_val(fund_b, "dcf_upside", pct=True)),
+                    ("Upside / Downside (DCF)", _last_val(fund_a, "dcf_upside", pct=True), _last_val(fund_b, "dcf_upside", pct=True)),
                 ]
 
                 # ── Technical Analysis ────────────────────────────────────────
@@ -897,8 +896,8 @@ if dashboard_ticker:
                     ("MA20", _last_tech(price_df, "ma20", dollar=True), _last_tech(price_b, "ma20", dollar=True)),
                     ("MACD", _last_tech(price_df, "macd_line"), _last_tech(price_b, "macd_line")),
                     ("RSI (14)", _last_tech(price_df, "rsi_14"), _last_tech(price_b, "rsi_14")),
-                    ("Historical Volatility 30D", _last_tech(price_df, "volatility_30", pct=True), _last_tech(price_b, "volatility_30", pct=True)),
-                    ("Beta vs. Index", _last_tech(price_df, "beta"), _last_tech(price_b, "beta")),
+                    ("Volatility (30D)", _last_tech(price_df, "volatility_30", pct=True), _last_tech(price_b, "volatility_30", pct=True)),
+                    ("Beta", _last_tech(price_df, "beta"), _last_tech(price_b, "beta")),
                     ("VaR 95%", _last_tech(price_df, "var_95", pct=True), _last_tech(price_b, "var_95", pct=True)),
                     ("Max Drawdown", _last_tech(price_df, "max_drawdown", pct=True), _last_tech(price_b, "max_drawdown", pct=True)),
                     ("Sharpe Ratio", _last_tech(price_df, "sharpe_ratio"), _last_tech(price_b, "sharpe_ratio")),
