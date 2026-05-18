@@ -1186,10 +1186,6 @@ class DataVisualizer:
                 _latest(fund_a, "interest_coverage") or 0,
                 _latest(fund_b, "interest_coverage") or 0,
             ),
-            "Altman Z": (
-                _latest(fund_a, "altman_z_score") or 0,
-                _latest(fund_b, "altman_z_score") or 0,
-            ),
         }
 
         fund_metrics = {
@@ -1212,10 +1208,6 @@ class DataVisualizer:
             "Gross Margin (%)": (
                 (_latest(fund_a, "gross_profit_margin") or 0) * 100,
                 (_latest(fund_b, "gross_profit_margin") or 0) * 100,
-            ),
-            "Dividend ($)": (
-                _latest(fund_a, "dividend") or 0,
-                _latest(fund_b, "dividend") or 0,
             ),
         }
 

@@ -4,6 +4,7 @@ from __future__ import annotations
 import base64
 import html
 import os
+import re
 import subprocess
 import sys
 from datetime import date, timedelta
@@ -271,9 +272,77 @@ def parse_tickers(raw: str) -> list[str]:
 
 
 def render_plain_text_block(text: str) -> None:
-    safe_text = html.escape(str(text) if text is not None else "N/A")
+    raw = str(text) if text is not None else "N/A"
+    # Decode entities first (e.g., &#x27;), then sanitize and format for consistent UI rendering.
+    raw = html.unescape(raw)
+    raw = raw.replace("```", "").replace("`", "")
+
+    subheading_tokens = {
+        "basic information:",
+        "summary statement:",
+        "comparison snippet",
+        "call to action:",
+        "global & us indicators",
+        "global indicators",
+        "vietnam domestic indicators",
+        "industry valuation",
+        "corporate events & news",
+        "profitability",
+        "activity ratios",
+        "liquidity & solvency",
+        "cash flow",
+        "fundamental valuation",
+        "technical analysis - trend summary",
+        "moving averages & oscillators",
+        "price & volume anomalies",
+        "risk metrics",
+        "financial health comparison",
+        "fundamental valuation comparison",
+        "technical & risk profile comparison",
+        "comparison summary",
+        "technical conclusion",
+        "overall financial health conclusion",
+    }
+
+    rows: list[str] = []
+    for line in raw.splitlines():
+        cleaned = line.strip()
+        if not cleaned:
+            continue
+
+        # Remove markdown heading markers and leading numbering like "1. Basic Information".
+        cleaned = re.sub(r"^#{1,6}\s*", "", cleaned)
+        cleaned = re.sub(r"^\d+\.\s*", "", cleaned)
+
+        # Normalize bullet prefix.
+        is_bullet = False
+        if cleaned.startswith("- ") or cleaned.startswith("* ") or cleaned.startswith("• "):
+            cleaned = re.sub(r"^[-*•]\s+", "", cleaned)
+            is_bullet = True
+
+        escaped = html.escape(cleaned)
+        lowered = cleaned.lower()
+        is_subheading = any(lowered.startswith(token) for token in subheading_tokens)
+
+        if is_subheading:
+            rows.append(f"<div class='ai-subheading'>{escaped}</div>")
+        elif is_bullet:
+            rows.append(f"<div class='ai-line'>&bull; {escaped}</div>")
+        else:
+            rows.append(f"<div class='ai-line'>{escaped}</div>")
+
+    formatted_html = "".join(rows) if rows else "<div class='ai-line'>N/A</div>"
     st.markdown(
-        f"<div style='white-space: pre-wrap; line-height: 1.65;'>{safe_text}</div>",
+        (
+            "<div class='ai-block'>"
+            "<style>"
+            ".ai-block{line-height:1.58;}"
+            ".ai-subheading{font-weight:700;font-size:1.06rem;margin:8px 0 4px 0;}"
+            ".ai-line{margin:2px 0;}"
+            "</style>"
+            f"{formatted_html}"
+            "</div>"
+        ),
         unsafe_allow_html=True,
     )
 
@@ -540,10 +609,29 @@ def metric_value(df: pd.DataFrame, col: str, fmt: str = "{:.2f}") -> str:
 
 def has_configured_api_key(env_var: str) -> bool:
     load_dotenv(APP_DIR / ".env", override=True)
+    if env_var == "GEMINI_API_KEY":
+        values = []
+
+        primary = (os.getenv("GEMINI_API_KEY") or "").strip()
+        if primary:
+            values.append(primary)
+
+        bulk = (os.getenv("GEMINI_API_KEYS") or "").strip()
+        if bulk:
+            values.extend([x.strip() for x in re.split(r"[,;\r\n]+", bulk) if x.strip()])
+
+        indexed = []
+        for name, value in os.environ.items():
+            if re.match(r"^GEMINI_API_KEY_\d+$", name):
+                indexed.append((name, (value or "").strip()))
+        indexed.sort(key=lambda item: int(item[0].split("_")[-1]))
+        values.extend([v for _, v in indexed if v])
+
+        valid = [v for v in values if v and not v.lower().startswith("your_")]
+        return len(valid) > 0
+
     value = (os.getenv(env_var) or "").strip()
-    if not value:
-        return False
-    return not value.lower().startswith("your_")
+    return bool(value and not value.lower().startswith("your_"))
 
 
 def ticker_market(ticker: str) -> str:
@@ -612,13 +700,7 @@ with st.sidebar:
     st.markdown("**AI Settings**")
     st.selectbox(
         "Gemini model",
-        [
-            "gemini-2.5-flash",
-            "gemini-2.0-flash",
-            "gemini-2.0-flash-lite",
-            "gemini-flash-latest",
-            "gemini-flash-lite-latest",
-        ],
+        ["gemini-2.5-flash"],
         index=0,
         key="gemini_model_selector",
     )
@@ -970,7 +1052,7 @@ if dashboard_ticker:
                 pair_key = f"{dashboard_ticker}|{stock_b}|{selected_ai_model}"
 
                 if not gemini_ready:
-                    st.warning("Gemini is not configured. Add a valid GEMINI_API_KEY to .env, then restart or refresh the app.")
+                    st.warning("Gemini is not configured. Add at least one valid key in GEMINI_API_KEY, GEMINI_API_KEYS, or GEMINI_API_KEY_1..N, then restart or refresh the app.")
 
                 if ai_col_run.button(
                     "Generate AI Analysis (Gemini)",
@@ -979,19 +1061,35 @@ if dashboard_ticker:
                     disabled=(not can_run_ai) or (not gemini_ready),
                 ):
                     try:
-                        with st.spinner("Generating AI analysis with Gemini..."):
-                            ai_data = {dashboard_ticker: price_df}
-                            if price_b is not None and not price_b.empty:
-                                ai_data[stock_b] = price_b
+                        with st.spinner("Generating AI analysis with Gemini (Module 4)..."):
+                            # Load fundamental, macro, industry, and news data
+                            fundamental_df_a = load_fundamental_df(dashboard_ticker)
+                            fundamental_df_b = load_fundamental_df(stock_b) if stock_b else None
 
-                            agent = AnalysisAgent(provider="gemini", model=selected_ai_model)
+                            if fundamental_df_a is None or fundamental_df_a.empty:
+                                raise ValueError(f"Missing fundamental data for {dashboard_ticker}.")
+                            if stock_b and (fundamental_df_b is None or fundamental_df_b.empty):
+                                raise ValueError(f"Missing fundamental data for {stock_b}.")
+                            
+                            # Load macro, industry, and news data
+                            macro_df = pd.read_csv(PROCESSED_DIR / "macro_processed.csv") if (PROCESSED_DIR / "macro_processed.csv").exists() else None
+                            industry_df = pd.read_csv(PROCESSED_DIR / "industry_processed.csv") if (PROCESSED_DIR / "industry_processed.csv").exists() else None
+                            news_df = pd.read_csv(PROCESSED_DIR / "news_processed.csv") if (PROCESSED_DIR / "news_processed.csv").exists() else None
+
+                            agent = AnalysisAgent(provider="gemini", model=selected_ai_model, max_tokens=8192, temperature=0.2)
                             analysis = agent.generate_full_analysis(
-                                ai_data,
-                                comparison_tickers=[dashboard_ticker, stock_b] if stock_b in ai_data else [dashboard_ticker],
-                                primary_ticker=dashboard_ticker,
+                                ticker_a=dashboard_ticker,
+                                price_df_a=price_df,
+                                fundamental_df_a=fundamental_df_a,
+                                macro_df=macro_df,
+                                industry_df=industry_df,
+                                news_df=news_df,
+                                ticker_b=stock_b if stock_b in [dashboard_ticker, stock_b] and stock_b else None,
+                                price_df_b=price_b if stock_b in [dashboard_ticker, stock_b] and stock_b else None,
+                                fundamental_df_b=fundamental_df_b if stock_b in [dashboard_ticker, stock_b] and stock_b else None,
                             )
                             st.session_state["ai_analysis_cache"][pair_key] = analysis
-                        st.success("AI analysis generated.")
+                        st.success("AI analysis (Module 4) generated.")
                     except Exception as exc:
                         st.error(f"AI analysis failed: {exc}")
 
@@ -1004,44 +1102,36 @@ if dashboard_ticker:
 
                 analysis = st.session_state["ai_analysis_cache"].get(pair_key)
                 if analysis:
-                    mode = analysis.get("analysis_mode")
-                    model_used = analysis.get("model_used")
+                    mode = analysis.get("analysis_mode", "unknown")
+                    model_used = analysis.get("model_used", "unknown")
+                    provider = analysis.get("provider", "gemini")
+                    market = analysis.get("market", "GLOBAL")
                     fallback_reason = analysis.get("fallback_reason")
-                    if mode == "llm_single_call":
-                        if model_used:
-                            st.success(f"AI mode: LLM single-call (grounded narrative output) - model: {model_used}")
-                        else:
-                            st.success("AI mode: LLM single-call (grounded narrative output).")
-                    elif mode == "llm_recovered_full_sections":
-                        msg = "AI mode: full 4-section LLM output recovered after single-call failure."
-                        if model_used:
-                            msg += f" Model: {model_used}"
+                    
+                    if mode == "llm_module4":
+                        msg = f"✓ AI mode: Module 4 full analysis (5-section) - Provider: {provider.upper()}, Model: {model_used}, Market: {market}"
                         st.success(msg)
-                    elif mode == "llm_sectional_fallback":
-                        msg = "AI mode: sectional LLM fallback (single-call JSON failed, but narrative still generated by LLM)."
-                        if model_used:
-                            msg += f" Model: {model_used}"
-                        st.info(msg)
-                    elif mode == "deterministic_fallback":
-                        if model_used:
-                            st.warning(f"AI mode: deterministic fallback (LLM unavailable or invalid output) - last model: {model_used}")
-                        else:
-                            st.warning("AI mode: deterministic fallback (LLM unavailable or invalid output).")
+                    else:
+                        st.info(f"AI Analysis mode: {mode} (Model: {model_used})")
 
                     if fallback_reason:
                         st.caption(f"Fallback reason: {fallback_reason}")
 
-                    with st.expander("Trend Summary", expanded=True):
-                        render_plain_text_block(analysis.get("trend_summary", "N/A"))
+                    with st.expander("Executive Summary", expanded=True):
+                        render_plain_text_block(analysis.get("executive_summary", "N/A"))
 
-                    with st.expander("Anomaly Report", expanded=True):
-                        render_plain_text_block(analysis.get("anomaly_report", "N/A"))
+                    with st.expander("Macro Analysis", expanded=True):
+                        render_plain_text_block(analysis.get("macro_analysis", "N/A"))
 
-                    with st.expander("Risk Commentary", expanded=True):
-                        render_plain_text_block(analysis.get("risk_commentary", "N/A"))
+                    with st.expander("Financial Health", expanded=True):
+                        render_plain_text_block(analysis.get("financial_health", "N/A"))
 
-                    with st.expander("Comparison", expanded=True):
-                        render_plain_text_block(analysis.get("comparison", "N/A"))
+                    with st.expander("Valuation Analysis", expanded=True):
+                        render_plain_text_block(analysis.get("valuation_analysis", "N/A"))
+
+                    if analysis.get("peer_comparison"):
+                        with st.expander("Peer Comparison", expanded=True):
+                            render_plain_text_block(analysis.get("peer_comparison", "N/A"))
                 else:
                     st.info("No AI analysis yet. Click 'Generate AI Analysis (Gemini)'.")
 

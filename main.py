@@ -127,7 +127,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--provider",
         default=DEFAULT_PROVIDER,
-        choices=["gemini", "anthropic", "openai"],
+        choices=["gemini"],
         help="LLM provider for AI analysis (default: %(default)s).",
     )
     parser.add_argument(
