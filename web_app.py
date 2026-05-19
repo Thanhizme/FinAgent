@@ -310,15 +310,21 @@ def render_plain_text_block(text: str) -> None:
         if not cleaned:
             continue
 
-        # Remove markdown heading markers and leading numbering like "1. Basic Information".
+        # Remove markdown heading markers.
         cleaned = re.sub(r"^#{1,6}\s*", "", cleaned)
-        cleaned = re.sub(r"^\d+\.\s*", "", cleaned)
 
         # Normalize bullet prefix.
         is_bullet = False
         if cleaned.startswith("- ") or cleaned.startswith("* ") or cleaned.startswith("• "):
             cleaned = re.sub(r"^[-*•]\s+", "", cleaned)
             is_bullet = True
+
+        numbered_match = re.match(r"^(\d+\.\s+)(.+)$", cleaned)
+        if numbered_match:
+            numbered_body = numbered_match.group(2).strip()
+            lowered_numbered = numbered_body.lower()
+            if any(lowered_numbered.startswith(token) for token in subheading_tokens):
+                cleaned = numbered_body
 
         escaped = html.escape(cleaned)
         lowered = cleaned.lower()
