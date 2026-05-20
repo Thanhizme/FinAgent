@@ -1478,8 +1478,10 @@ RULES:
 CONTEXT (JSON):
 {json.dumps(context, indent=2, default=str)}
 
-STRICT OUTPUT FORMAT FOR EACH METRIC:
-`1. <Metric>: <Value> -> <2-3 sentence interpretation>`
+STRICT OUTPUT FORMAT:
+- Keep numbering from 1 to 24.
+- For items 1 and 2 (P/E and P/B), use the nested bullet format exactly as specified below.
+- For items 3 to 24, use: `N. <Metric>: <Value> -> <2-3 sentence interpretation>`
 
 PROFITABILITY:
 1. Revenue Growth (YoY) - Interpret acceleration/deceleration vs industry
@@ -1596,8 +1598,18 @@ STRICT OUTPUT FORMAT FOR EACH METRIC:
 `1. <Metric>: <Value> -> <2-3 sentence interpretation>`
 
 FUNDAMENTAL VALUATION (3 metrics):
-1. Current P/E vs 1Y avg vs 5Y avg vs Industry avg - Interpret cheap/expensive positioning
-2. Current P/B vs 1Y avg vs 5Y avg vs Industry avg - Interpret asset-based valuation. If Current P/B is roughly equal to its 1Y and 5Y averages, explicitly say it is consistent with history rather than higher or lower than history.
+1. P/E
+- P/E 1Y: use display_valuation_metrics["P/E 1Y avg"]
+- P/E 5Y: use display_valuation_metrics["P/E 5Y avg"]
+- P/E Industry: use display_valuation_metrics["Industry P/E"]
+-> Write exactly 2 interpretation sentences: (a) compare P/E 1Y vs P/E 5Y, (b) compare P/E 1Y vs Industry P/E; then conclude with one of: Undervalued / Fairly Valued / Overvalued.
+
+2. P/B
+- P/B 1Y: use display_valuation_metrics["P/B 1Y avg"]
+- P/B 5Y: use display_valuation_metrics["P/B 5Y avg"]
+- P/B Industry: use display_valuation_metrics["Industry P/B"]
+-> Write exactly 2 interpretation sentences: (a) compare P/B 1Y vs P/B 5Y, (b) compare P/B 1Y vs Industry P/B; then conclude with one of: Undervalued / Fairly Valued / Overvalued.
+
 3. DCF Valuation (FCFE-Based): Intrinsic Price, Market Price, Upside/Downside %, Valuation Status (Undervalued / Fairly Valued / Overvalued) - Interpret reliability and margin of safety
 
 TECHNICAL ANALYSIS - TREND SUMMARY (5 metrics):
@@ -1642,7 +1654,8 @@ RULES:
 - Do not use markdown math, LaTeX, or fragmented digit formatting.
 - If 12-month range, volume anomaly, gap, or sudden-move data is unavailable, state that explicitly and still provide interpretation of the missing-data implication.
 - Write "Technical Conclusion" as a separate labelled paragraph after the numbered metrics.
-- Put each numbered metric on its own line. Never merge item 4 with item 5 or any later item.
+- Do not merge numbered items. Keep each numbered metric block distinct.
+- For items 1 and 2, keep the metric title plus its sub-bullets and interpretation together as one block.
 - Separate the Fundamental Valuation, Technical Analysis, Price & Volume Anomalies, and Risk Metrics blocks with blank lines.
 - Use the values in display_valuation_metrics verbatim for the valuation lines, including the explicit DCF Valuation Status field.
 - Use the values in display_valuation_metrics verbatim for the technical and risk metric labels as well, especially percentage-formatted volatility, VaR, and max drawdown values.
