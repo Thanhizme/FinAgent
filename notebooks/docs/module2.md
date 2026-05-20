@@ -57,10 +57,10 @@ Implement a pipeline that handles the following:
 
 
 
-### E. Cash flow
+### D. Cash flow
 - **FCFF (Free Cash Flow to Firm)** = `operating_cash_flow` + `interest_expense` × (1 − `tax_rate`) − `capital_expenditure` 
 - **FCFE (Free Cash Flow to Equity)** = `operating_cash_flow` − `capital_expenditure` + net borrowing; where net borrowing = change in `total_debt`
-###. Valuation Metrics
+### E. Valuation Metrics
 - **P/E 1Y average**: Rolling 252-day mean of `pe` ratio 
 - **P/E 5Y average**: Rolling 1260-day mean of `pe` ratio 
 - **P/E industry**: Pass through from `industry_df` (`industry_pe`) 
@@ -99,6 +99,11 @@ Calculate the following features for each ticker using `pandas` and the `ta` (Te
 Signal logic: If close > MA → BUY, if close < MA → SELL. Apply for both SMA and EMA.
 - RSI (Relative Strength Index, 14-day): Identify overbought (>70) and oversold (<30) conditions.
 - MACD (12,26): MACD line (EMA12 - EMA26), Signal line (EMA9 of MACD), and MACD Histogram.
+- Bollinger band: 
+MB = (P1 + P2 + ... + P20) / 20
+σ = √[ Σ(Pi - MB)² / 20 ]
+UB = MB + (2 × σ)
+LB = MB - (2 × σ)
 
 
 
@@ -112,7 +117,7 @@ Signal logic: If close > MA → BUY, if close < MA → SELL. Apply for both SMA 
 ### E. Risk Metrics
 - Historical Volatility: Rolling 30-day and 60-day standard deviation of daily returns.
 - Beta: 60-day rolling beta vs market benchmark (VN-Index for VN market, S&P500 for Global).
-- VaR (Value at Risk) 95%: 5th percentile of rolling daily returns distribution.
+- VaR (Value at Risk) 95%: 5th percentile oờrolling daily returns distribution.
 - VaR (Value at Risk) 99%: 1st percentile of rolling daily returns distribution.
 - Max Drawdown: Peak-to-trough decline.
 - Sharpe Ratio: Annualized return divided by annualized volatility.
@@ -150,7 +155,7 @@ Fundamental — Solvency: de_ratio, interest_coverage
 Fundamental — Cash Flow: fcff, fcfe
 Fundamental — Valuation: pe_1y_avg, pe_5y_avg, pe_industry, pb_1y_avg, pb_5y_avg, pb_industry, dcf_intrinsic_price, dcf_upside
 Technical — Performance: daily_return, log_return, cum_return_7d, cum_return_30d, cum_return_90d, cum_return_ytd
-Technical — Trend: ma20, ma50, ma200, ma20_signal, ma50_signal, ma200_signal
+Technical — Trend: ma20, ma50, ma200, ma20_signal, ma50_signal, ma200_signal,bollinger_band
 Technical — Momentum: rsi_14, macd_line, macd_signal, macd_hist
 Technical — Anomalies: volume_spike, gap_up, gap_down, sudden_price_movement
 Technical — Risk: volatility_30, volatility_60, beta, var_95, var_99, max_drawdown, sharpe_ratio
@@ -172,7 +177,3 @@ Technical Valuation: rsi_14, macd_line, macd_signal, macd_hist, beta, sharpe_rat
 
 - Processed CSVs are persisted in `data/processed/processed_data/`.
 - Charts generated from processed data are persisted in `data/processed/visualization/`.
-
-
-
-
