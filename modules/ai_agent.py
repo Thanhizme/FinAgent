@@ -479,6 +479,80 @@ class AnalysisAgent:
             r"\1",
             cleaned,
         )
+
+        # Normalise Short-term/Long-term View blocks:
+        # Collect all sub-sentences and merge them onto the header line (inline after the colon).
+        # Removes any separate bullet lines under the header.
+        _view_header_re = re.compile(
+            r"^[ \t]*[\u2022\-\*]?[ \t]*(Short-term View|Long-term View)\s*\(", re.IGNORECASE
+        )
+        _label_re = re.compile(r"^\[(?:Fundamental|Technical(?:/Valuation)?)\][ \t]*")
+        _any_bullet_re = re.compile(r"^[ \t]*[\u2022\-\*][ \t]+")
+        _cleaned_lines: list[str] = []
+        _view_header_line: str | None = None
+        _view_sentences: list[str] = []
+        _in_view_block = False
+
+        def _flush_view() -> None:
+            """Append accumulated view header + sentences as a single line."""
+            if _view_header_line is not None:
+                # Strip trailing colon from header to re-add cleanly.
+                header = _view_header_line.rstrip(":")
+                combined = (header + ": " + " ".join(_view_sentences)).strip() if _view_sentences else _view_header_line
+                _cleaned_lines.append(combined)
+
+        for _line in cleaned.splitlines():
+            _stripped_line = _line.strip()
+            if _view_header_re.match(_stripped_line):
+                # Flush previous view block if any.
+                if _in_view_block:
+                    _flush_view()
+                _in_view_block = True
+                # Build clean header with • prefix, strip any existing bullet.
+                bare = _any_bullet_re.sub("", _stripped_line)
+                # If content already follows the colon on the same line, split it off.
+                _colon_match = re.match(r"^((?:Short-term View|Long-term View)[^:]*:)[ \t]*(.+)", bare, re.IGNORECASE)
+                if _colon_match:
+                    _view_header_line = "\u2022 " + _colon_match.group(1)
+                    _view_sentences = [_colon_match.group(2).strip()]
+                else:
+                    _view_header_line = "\u2022 " + bare.rstrip(":")
+                    _view_sentences = []
+                continue
+            if _in_view_block:
+                # Exit block on blank line or next major section header.
+                if _stripped_line == "" or re.match(r"^(?:Comparison Snippet|Call to Action)[\.:]?", _stripped_line):
+                    _flush_view()
+                    _view_header_line = None
+                    _view_sentences = []
+                    _in_view_block = False
+                    _cleaned_lines.append(_line)
+                    continue
+                # Skip if it's another view header (handled at top of loop).
+                if _view_header_re.match(_stripped_line):
+                    _flush_view()
+                    _in_view_block = True
+                    bare = _any_bullet_re.sub("", _stripped_line)
+                    _colon_match = re.match(r"^((?:Short-term View|Long-term View)[^:]*:)[ \t]*(.+)", bare, re.IGNORECASE)
+                    if _colon_match:
+                        _view_header_line = "\u2022 " + _colon_match.group(1)
+                        _view_sentences = [_colon_match.group(2).strip()]
+                    else:
+                        _view_header_line = "\u2022 " + bare.rstrip(":")
+                        _view_sentences = []
+                    continue
+                # Collect sentence: strip bullet/label prefixes.
+                sentence = _any_bullet_re.sub("", _stripped_line)
+                sentence = _label_re.sub("", sentence).strip()
+                if sentence:
+                    _view_sentences.append(sentence)
+                continue
+            _cleaned_lines.append(_line)
+
+        # Flush any open view block at end of text.
+        if _in_view_block:
+            _flush_view()
+        cleaned = "\n".join(_cleaned_lines)
         cleaned = re.sub(r"(?m)^Technical Conclusion\s*$", "Technical Conclusion:", cleaned)
         cleaned = re.sub(r"(?m)^Overall Financial Health Conclusion\s*$", "Overall Financial Health Conclusion:", cleaned)
 
@@ -1204,8 +1278,10 @@ Basic Information:
    - Market Cap Classification: <Large Cap | Mid Cap | Small Cap> (~<USD value> if available)
 
 Summary Statement:
-   - Short-term View (1–3 months): Combine Fundamental + Technical signals. 2–3 sentences.
-    - Long-term View (1–3 years): Cover structural growth drivers, competitive moat, earnings trajectory, re-rating potential, and key risks in 2–3 sentences.
+   • Short-term View (1–3 months): [1 sentence on Fundamental signal (revenue trend, profitability, cash flow quality).] [1 sentence on Technical/Valuation signal (momentum, moving averages, RSI, DCF gap).]
+   • Long-term View (1–3 years): [1 sentence on Fundamental signal (competitive moat, earnings trajectory, growth outlook).] [1 sentence on Technical/Valuation signal (re-rating potential, valuation vs history and peers).]
+
+   Both views must be written as a SINGLE line each: the header followed immediately by the two sentences on the same line. Do NOT put the sentences on separate lines.
 
 Comparison Snippet (if comparing to {ticker_b}): 2–3 sentences comparing investment profiles.
     - Use the comparison company data in the context when available.
@@ -1227,6 +1303,9 @@ RULES:
 - Put each bullet or labelled line on its own line. Do not merge multiple items into one paragraph.
 - Do not number the four Executive Summary section titles.
 - Do not add any prefatory sentence before "Basic Information:".
+- Prefix Short-term View and Long-term View lines with a bullet character •.
+- Write both sentences for each view on the SAME line as the header, after the colon. Do NOT split them to separate lines.
+- Do NOT include [Fundamental] or [Technical/Valuation] labels in the output sentences.
 """
 
     def _build_macro_analysis_prompt(
@@ -1317,9 +1396,16 @@ GLOBAL & US INDICATORS (5 metrics):
 4. US GDP growth rate
 5. US inflation level (CPI)
 
-INDUSTRY VALUATION & PROFITABILITY (use the most prominent available industry metrics):
-- Output each available industry metric as a numbered line with a 2-3 sentence interpretation.
-- Explain whether the industry is cheap or expensive versus history and what that means for Stock A.
+INDUSTRY VALUATION & PROFITABILITY:
+Output as bullet points followed by a 1-sentence comparative conclusion:
+
+- P/E Industry 1Y avg: {Industry PE 1Y avg from display_industry_metrics}
+- P/E Industry 5Y avg: {Industry PE 5Y avg from display_industry_metrics}
+  -> 1 sentence comparing P/E 1Y vs P/E 5Y and concluding which valuation stage the industry is currently in.
+
+- P/B Industry 1Y avg: {Industry PB 1Y avg from display_industry_metrics}
+- P/B Industry 5Y avg: {Industry PB 5Y avg from display_industry_metrics}
+  -> 1 sentence comparing P/B 1Y vs P/B 5Y and concluding which valuation stage the industry is currently in.
 
 CORPORATE EVENTS & NEWS:
 - For each detected event in recent_news_events, output a numbered line with the event type and a 2-3 sentence interpretation of its likely impact on stock price, sentiment, or fundamentals.
