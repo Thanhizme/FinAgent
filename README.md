@@ -23,6 +23,7 @@ Anthropic Claude, or OpenAI GPT.
 - [Data Sources](#data-sources)
 - [Visualisations](#visualisations)
 - [AI Analysis](#ai-analysis)
+- [Quant Extension](#quant-extension)
 - [Team](#team)
 
 ---
@@ -33,20 +34,33 @@ Anthropic Claude, or OpenAI GPT.
 FinAgent/
 ├── data/
 │   ├── raw/                         # Raw data fetched from APIs
-│   └── processed/
+│   ├── processed/
 │       ├── processed_data/          # Cleaned, feature-engineered CSVs
 │       └── visualization/           # Exported HTML/PNG charts
+│   └── quant_outputs/               # Quant artifacts (signals, backtests, portfolio)
+│       ├── signals/                 # Strategy signals (Buy/Sell/Hold)
+│       ├── backtests/               # Equity curves, trade logs, metrics
+│       └── portfolio/               # Weights and portfolio-level outputs
 ├── modules/
 │   ├── __init__.py        # Package exports
-│   ├── collector.py       # Stage 1 - Data acquisition
-│   ├── processor.py       # Stage 2 - Cleaning and feature engineering
-│   ├── visualizer.py      # Stage 3 - Chart generation
-│   └── ai_agent.py        # Stage 4 - LLM analysis
+│   ├── collector.py       # Stage 1 - Data Collection
+│   ├── processor.py       # Stage 2 - Data Processing & Feature Engineering
+│   ├── visualizer.py      # Stage 3 - Visualization & Reporting
+│   ├── ai_agent.py        # Stage 4 - AI Financial Interpretation
+│   ├── quant_strategy.py  # Stage 5 - Signal Generation
+│   ├── backtester.py      # Stage 6 - Strategy Backtesting
+│   ├── portfolio.py       # Stage 7 - Portfolio Construction & Optimization
+│   └── risk_manager.py    # Stage 8 - Risk Overlay & Position Management
 ├── notebooks/
 │   └── docs/
-│       ├── module1.md     # Data collection specification
-│       ├── module2.md     # Processing & feature engineering specification
-│       └── module3.md     # Visualization specification
+│       ├── stage1_data_collection.md
+│       ├── stage2_processing_feature_engineering.md
+│       ├── stage3_visualization_reporting.md
+│       ├── stage4_ai_financial_interpretation.md
+│       ├── stage5_signal_generation.md
+│       ├── stage6_strategy_backtesting.md
+│       ├── stage7_portfolio_optimization.md
+│       └── stage8_risk_overlay_position_management.md
 ├── .env                   # Local secrets - never commit (git-ignored)
 ├── .env.example           # API key configuration template
 ├── .gitignore
@@ -66,6 +80,26 @@ FinAgent/
 | **Processor**  | Missing value handling, duplicate removal, type normalisation, IQR outlier detection, full technical indicator suite, rolling beta/Sharpe, relative strength, news sentiment aggregation |
 | **Visualizer** | Price trend + volume, correlation heatmap, returns distribution, rolling stats / Bollinger Bands                                                                                         |
 | **AI Agent**   | Trend summary, anomaly report, risk commentary, multi-asset comparison via Gemini / Claude / GPT                                                                                         |
+| **Quant Strategy** | Converts processed indicators into explicit trading signals (`Buy/Sell/Hold`) with combined signal scoring                                                                          |
+| **Backtester** | Vectorized backtest with transaction cost + slippage, equity curve, trade log, and core performance metrics                                                                             |
+| **Portfolio**  | Portfolio construction helpers: equal-weight, Max Sharpe search, and Risk Parity approximation                                                                                           |
+| **Risk Manager** | Risk overlays for stop-loss, trailing stop, and volatility-targeted position sizing                                                                                                    |
+
+---
+
+## Quant Extension
+
+The quant extension is additive and non-breaking:
+
+- Existing modules (`collector.py`, `processor.py`, `visualizer.py`, `ai_agent.py`) remain unchanged in role.
+- Quant artifacts are isolated under `data/quant_outputs/`.
+- The Streamlit entrypoint remains `web_app.py`.
+
+### Quant Output Paths
+
+- `data/quant_outputs/signals/`: signal files from `quant_strategy.py`
+- `data/quant_outputs/backtests/`: equity curve, trade log, metrics from `backtester.py`
+- `data/quant_outputs/portfolio/`: optimized weights and portfolio outputs from `portfolio.py`
 
 ---
 
@@ -413,4 +447,6 @@ not constitute financial advice.
 
 ---
 
-## Team
+## Tests with full data
+VN stock: ADS vs TCM
+US stock: AAPL vs MSFT
