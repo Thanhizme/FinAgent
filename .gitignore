@@ -36,8 +36,10 @@ ENV/
 # --- Data Files (raw & processed â€“ can be large) ---
 data/raw/*
 data/processed/*
+data/quant_outputs/*
 !data/raw/.gitkeep
 !data/processed/.gitkeep
+!data/quant_outputs/.gitkeep
 
 # --- Logs ---
 *.log
