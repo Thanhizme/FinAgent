@@ -12,6 +12,18 @@ from .collector import DataCollector
 from .processor import DataProcessor
 from .visualizer import DataVisualizer
 from .ai_agent import AnalysisAgent, AIAgent
+from .quant_strategy import QuantStrategy
+from .backtester import Backtester
+from .portfolio import PortfolioOptimizer
 
-__all__ = ["DataCollector", "DataProcessor", "DataVisualizer", "AnalysisAgent", "AIAgent"]
+__all__ = [
+  "DataCollector",
+  "DataProcessor",
+  "DataVisualizer",
+  "AnalysisAgent",
+  "AIAgent",
+  "QuantStrategy",
+  "Backtester",
+  "PortfolioOptimizer",
+]
 

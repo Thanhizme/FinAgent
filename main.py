@@ -8,7 +8,15 @@ from pathlib import Path
 import pandas as pd
 from dateutil.relativedelta import relativedelta
 
-from modules import DataCollector, DataProcessor, DataVisualizer, AIAgent
+from modules import (
+    AIAgent,
+    Backtester,
+    DataCollector,
+    DataProcessor,
+    DataVisualizer,
+    PortfolioOptimizer,
+    QuantStrategy,
+)
 
 logging.basicConfig(
     level=logging.INFO,
@@ -140,6 +148,11 @@ def build_parser() -> argparse.ArgumentParser:
         default="daily",
         choices=["daily", "weekly", "monthly", "yearly", "all"],
         help="Chart timeframe for auto-visualization export (default: %(default)s).",
+    )
+    parser.add_argument(
+        "--skip-quant",
+        action="store_true",
+        help="Skip quant stages (signal generation, backtest, portfolio).",
     )
     return parser
 
@@ -422,6 +435,54 @@ def run_ai_analysis(processed_data: dict, provider: str) -> dict[str, str]:
     logger.info("AI analysis complete.")
     return reports
 
+
+def run_quant_pipeline(tickers: list[str]) -> dict[str, dict]:
+    """Run quant extension stages (5-7) with per-stage fault isolation."""
+    quant_results: dict[str, dict] = {
+        "signals": {},
+        "backtests": {},
+        "portfolio": {},
+    }
+
+    logger.info("Stage 5: Quant Signal Generation")
+    signal_results = QuantStrategy.run_for_universe(tickers)
+    quant_results["signals"] = signal_results
+    success_signal_tickers = list(signal_results.keys())
+    logger.info(
+        "Stage 5 complete | requested=%d | success=%d",
+        len(tickers),
+        len(success_signal_tickers),
+    )
+
+    if not success_signal_tickers:
+        logger.warning("No successful signal outputs. Skipping Stage 6-7.")
+        return quant_results
+
+    logger.info("Stage 6: Strategy Backtesting")
+    backtest_results = Backtester.run_for_universe(success_signal_tickers)
+    quant_results["backtests"] = backtest_results
+    success_backtest_tickers = list(backtest_results.keys())
+    logger.info(
+        "Stage 6 complete | input=%d | success=%d",
+        len(success_signal_tickers),
+        len(success_backtest_tickers),
+    )
+
+    if not success_backtest_tickers:
+        logger.warning("No successful backtest outputs. Skipping Stage 7.")
+        return quant_results
+
+    logger.info("Stage 7: Portfolio Optimization")
+    try:
+        portfolio_optimizer = PortfolioOptimizer(tickers=success_backtest_tickers)
+        portfolio_results = portfolio_optimizer.run_for_universe()
+        quant_results["portfolio"] = portfolio_results
+        logger.info("Stage 7 complete | strategies=%s", list(portfolio_results.keys()))
+    except Exception as exc:
+        logger.exception("Stage 7 failed: %s", exc)
+
+    return quant_results
+
 def main() -> None:
     parser = build_parser()
     args = parser.parse_args()
@@ -433,6 +494,7 @@ def main() -> None:
     logger.info("Period  : %s to %s", args.start, args.end)
     logger.info("Provider: %s", args.provider)
     logger.info("Charts  : timeframe=%s", args.timeframe)
+    logger.info("Quant   : %s", "disabled" if args.skip_quant else "enabled")
 
     try:
         raw_data       = run_collection(args.tickers, args.start, args.end)
@@ -445,6 +507,15 @@ def main() -> None:
                 logger.info("[AI] %s:\n%s", section.upper(), content)
 
         generate_checklist_report(processed_data)
+
+        if not args.skip_quant:
+            quant_results = run_quant_pipeline(args.tickers)
+            logger.info(
+                "Quant summary | signals=%d | backtests=%d | portfolio_strategies=%d",
+                len(quant_results.get("signals", {})),
+                len(quant_results.get("backtests", {})),
+                len(quant_results.get("portfolio", {})),
+            )
 
     except KeyboardInterrupt:
         logger.warning("Pipeline interrupted by user.")
