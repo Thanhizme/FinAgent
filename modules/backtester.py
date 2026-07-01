@@ -245,7 +245,7 @@ if __name__ == "__main__":
 		format="%(asctime)s | %(levelname)-8s | %(name)s | %(message)s",
 	)
 
-	sample = Backtester("AAPL")
+	sample = Backtester("AMZN")
 	result = sample.run_for_ticker()
 
 	print("\n=== Metrics ===")

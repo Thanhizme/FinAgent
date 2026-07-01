@@ -328,7 +328,7 @@ if __name__ == "__main__":
         format="%(asctime)s | %(levelname)-8s | %(name)s | %(message)s",
     )
 
-    sample_ticker = "AAPL"
+    sample_ticker = "AMZN"
     strategy = QuantStrategy(sample_ticker)
     signal_df = strategy.run_for_ticker()
 
