@@ -16,6 +16,7 @@ from modules import (
     DataVisualizer,
     PortfolioOptimizer,
     QuantStrategy,
+    RiskManager,
 )
 
 logging.basicConfig(
@@ -442,6 +443,7 @@ def run_quant_pipeline(tickers: list[str]) -> dict[str, dict]:
         "signals": {},
         "backtests": {},
         "portfolio": {},
+        "risk": {},
     }
 
     logger.info("Stage 5: Quant Signal Generation")
@@ -478,8 +480,14 @@ def run_quant_pipeline(tickers: list[str]) -> dict[str, dict]:
         portfolio_results = portfolio_optimizer.run_for_universe()
         quant_results["portfolio"] = portfolio_results
         logger.info("Stage 7 complete | strategies=%s", list(portfolio_results.keys()))
+
+        logger.info("Stage 8: Risk Overlay & Position Management")
+        risk_manager = RiskManager()
+        risk_results = risk_manager.run_for_universe()
+        quant_results["risk"] = risk_results
+        logger.info("Stage 8 complete | strategies=%s", list(risk_results.keys()))
     except Exception as exc:
-        logger.exception("Stage 7 failed: %s", exc)
+        logger.exception("Stage 7/8 failed: %s", exc)
 
     return quant_results
 
@@ -511,10 +519,11 @@ def main() -> None:
         if not args.skip_quant:
             quant_results = run_quant_pipeline(args.tickers)
             logger.info(
-                "Quant summary | signals=%d | backtests=%d | portfolio_strategies=%d",
+                "Quant summary | signals=%d | backtests=%d | portfolio_strategies=%d | risk_strategies=%d",
                 len(quant_results.get("signals", {})),
                 len(quant_results.get("backtests", {})),
                 len(quant_results.get("portfolio", {})),
+                len(quant_results.get("risk", {})),
             )
 
     except KeyboardInterrupt:

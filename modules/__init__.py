@@ -15,6 +15,7 @@ from .ai_agent import AnalysisAgent, AIAgent
 from .quant_strategy import QuantStrategy
 from .backtester import Backtester
 from .portfolio import PortfolioOptimizer
+from .risk_manager import RiskManager
 
 __all__ = [
   "DataCollector",
@@ -25,5 +26,6 @@ __all__ = [
   "QuantStrategy",
   "Backtester",
   "PortfolioOptimizer",
+  "RiskManager",
 ]
 
